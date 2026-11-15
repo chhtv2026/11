@@ -2,27 +2,46 @@ import { promises as fs } from "fs";
 import path from "path";
 import { randomUUID } from "crypto";
 import {
+  checkValues,
+  criteria,
+  defaultWeights,
+  emptyChecks,
   emptyPlot,
   emptySource,
+  stopFactors,
+  type CheckValue,
+  type Criterion,
   type Finding,
   type Plot,
   type PlotInput,
+  type Settings,
   type Source,
   type SourceInput,
+  type StopFactor,
+  type Weights,
 } from "./registry";
 
-type Data = { sources: Source[]; plots: Plot[] };
+type Data = { sources: Source[]; plots: Plot[]; settings: Settings };
 
 const DATA_FILE = path.join(process.cwd(), "data", "registry.json");
 
 // Все записи идут через одну очередь, чтобы параллельные запросы не затирали файл друг другу
 let queue: Promise<unknown> = Promise.resolve();
 
+// Дополняет данные, сохранённые более ранними версиями приложения, новыми полями
+function normalize(data: Partial<Data>): Data {
+  return {
+    sources: data.sources ?? [],
+    plots: (data.plots ?? []).map((p) => ({ ...p, checks: { ...emptyChecks(), ...p.checks }, scores: p.scores ?? {} })),
+    settings: { weights: { ...defaultWeights, ...data.settings?.weights } },
+  };
+}
+
 async function load(): Promise<Data> {
   try {
-    return JSON.parse(await fs.readFile(DATA_FILE, "utf8")) as Data;
+    return normalize(JSON.parse(await fs.readFile(DATA_FILE, "utf8")));
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { sources: [], plots: [] };
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return normalize({});
     throw err;
   }
 }
@@ -102,17 +121,41 @@ function cleanFindings(findings: Finding[] | undefined): Finding[] | undefined {
     }));
 }
 
+function cleanChecks(checks: Partial<Record<StopFactor, CheckValue>> | undefined) {
+  if (!checks) return undefined;
+  const result = emptyChecks();
+  for (const key of Object.keys(stopFactors) as StopFactor[]) {
+    if (checks[key] && checks[key] in checkValues) result[key] = checks[key];
+  }
+  return result;
+}
+
+function cleanScores(scores: Partial<Record<Criterion, number>> | undefined) {
+  if (!scores) return undefined;
+  const result: Partial<Record<Criterion, number>> = {};
+  for (const key of Object.keys(criteria) as Criterion[]) {
+    const value = Math.round(Number(scores[key]));
+    if (value >= 1 && value <= 5) result[key] = value;
+  }
+  return result;
+}
+
+// Сложные поля проверяются отдельно; undefined — поле не прислали, оставляем как было
+function cleanPlotInput(input: Partial<PlotInput>) {
+  const fields: Partial<PlotInput> = pick(emptyPlot(), input);
+  const findings = cleanFindings(input.findings);
+  const checks = cleanChecks(input.checks);
+  const scores = cleanScores(input.scores);
+  delete fields.findings;
+  delete fields.checks;
+  delete fields.scores;
+  return { ...fields, ...(findings && { findings }), ...(checks && { checks }), ...(scores && { scores }) };
+}
+
 export function createPlot(input: Partial<PlotInput>): Promise<Plot> {
   return mutate((data) => {
     const now = new Date().toISOString();
-    const plot: Plot = {
-      ...emptyPlot(),
-      ...pick(emptyPlot(), input),
-      findings: cleanFindings(input.findings) ?? [],
-      id: randomUUID(),
-      createdAt: now,
-      updatedAt: now,
-    };
+    const plot: Plot = { ...emptyPlot(), ...cleanPlotInput(input), id: randomUUID(), createdAt: now, updatedAt: now };
     data.plots.push(plot);
     return plot;
   });
@@ -122,11 +165,18 @@ export function updatePlot(id: string, input: Partial<PlotInput>) {
   return mutate((data) => {
     const plot = data.plots.find((p) => p.id === id);
     if (!plot) return null;
-    const findings = cleanFindings(input.findings);
-    Object.assign(plot, pick(emptyPlot(), input), findings ? { findings } : {}, {
-      updatedAt: new Date().toISOString(),
-    });
+    Object.assign(plot, cleanPlotInput(input), { updatedAt: new Date().toISOString() });
     return plot;
+  });
+}
+
+export function updateWeights(input: Partial<Weights>) {
+  return mutate((data) => {
+    for (const key of Object.keys(criteria) as Criterion[]) {
+      const value = Number(input[key]);
+      if (Number.isFinite(value) && value >= 0) data.settings.weights[key] = Math.round(value);
+    }
+    return data.settings;
   });
 }
 
