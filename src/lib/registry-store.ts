@@ -20,6 +20,7 @@ import {
   type StopFactor,
   type Weights,
 } from "./registry";
+import { economicsFields, emptyEconomics, type Economics, type EconomicsField } from "./economics";
 
 type Data = { sources: Source[]; plots: Plot[]; settings: Settings };
 
@@ -32,7 +33,12 @@ let queue: Promise<unknown> = Promise.resolve();
 function normalize(data: Partial<Data>): Data {
   return {
     sources: data.sources ?? [],
-    plots: (data.plots ?? []).map((p) => ({ ...p, checks: { ...emptyChecks(), ...p.checks }, scores: p.scores ?? {} })),
+    plots: (data.plots ?? []).map((p) => ({
+      ...p,
+      checks: { ...emptyChecks(), ...p.checks },
+      scores: p.scores ?? {},
+      economics: { ...emptyEconomics(), ...p.economics },
+    })),
     settings: { weights: { ...defaultWeights, ...data.settings?.weights } },
   };
 }
@@ -140,16 +146,35 @@ function cleanScores(scores: Partial<Record<Criterion, number>> | undefined) {
   return result;
 }
 
+function cleanEconomics(economics: Partial<Economics> | undefined) {
+  if (!economics) return undefined;
+  const result = emptyEconomics();
+  for (const key of Object.keys(economicsFields) as EconomicsField[]) {
+    const raw = economics[key];
+    const value = raw === null || raw === undefined || (raw as unknown) === "" ? null : Number(raw);
+    result[key] = value !== null && Number.isFinite(value) && value >= 0 ? value : null;
+  }
+  return result;
+}
+
 // Сложные поля проверяются отдельно; undefined — поле не прислали, оставляем как было
 function cleanPlotInput(input: Partial<PlotInput>) {
   const fields: Partial<PlotInput> = pick(emptyPlot(), input);
   const findings = cleanFindings(input.findings);
   const checks = cleanChecks(input.checks);
   const scores = cleanScores(input.scores);
+  const economics = cleanEconomics(input.economics);
   delete fields.findings;
   delete fields.checks;
   delete fields.scores;
-  return { ...fields, ...(findings && { findings }), ...(checks && { checks }), ...(scores && { scores }) };
+  delete fields.economics;
+  return {
+    ...fields,
+    ...(findings && { findings }),
+    ...(checks && { checks }),
+    ...(scores && { scores }),
+    ...(economics && { economics }),
+  };
 }
 
 export function createPlot(input: Partial<PlotInput>): Promise<Plot> {

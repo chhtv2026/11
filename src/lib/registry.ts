@@ -1,4 +1,5 @@
 // Типы и справочники реестра. Файл без серверных импортов — его использует и интерфейс.
+import { emptyEconomics, type Economics } from "./economics";
 
 export const sourceTypes = {
   fund: "Фонд перераспределения земель",
@@ -127,6 +128,7 @@ export type Plot = {
   checks: Record<StopFactor, CheckValue>;
   // Баллы 1–5; критерий без балла ещё не оценён
   scores: Partial<Record<Criterion, number>>;
+  economics: Economics;
   createdAt: string;
   updatedAt: string;
 };
@@ -156,5 +158,6 @@ export function emptyPlot(): PlotInput {
     findings: [],
     checks: emptyChecks(),
     scores: {},
+    economics: emptyEconomics(),
   };
 }

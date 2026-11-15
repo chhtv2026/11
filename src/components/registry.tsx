@@ -27,7 +27,21 @@ import {
   type Weights,
 } from "@/lib/registry";
 
+import { calculate, economicsFields, type Economics, type EconomicsField, type EconomicsResult } from "@/lib/economics";
+
 type Data = { sources: Source[]; plots: Plot[]; settings: Settings };
+
+const rub = new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 0 });
+const rubCompact = new Intl.NumberFormat("ru-RU", { notation: "compact", maximumFractionDigits: 1 });
+
+function money(value: number, compact = false) {
+  const text = compact ? rubCompact.format(value) : rub.format(value);
+  return `${value > 0 && compact ? "+" : ""}${text} ₽`;
+}
+
+function moneyColor(value: number) {
+  return value > 0 ? "text-emerald-700 dark:text-emerald-400" : value < 0 ? "text-rose-700 dark:text-rose-400" : "";
+}
 
 const statusColors: Record<PlotStatus, string> = {
   found: "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300",
@@ -255,6 +269,79 @@ function AssessmentEditor({
   );
 }
 
+function EconomicsEditor({
+  economics,
+  areaHa,
+  onChange,
+}: {
+  economics: Economics;
+  areaHa: number | null;
+  onChange: (e: Economics) => void;
+}) {
+  const result = calculate(economics, areaHa);
+  return (
+    <div className="flex flex-col gap-3 rounded-xl border border-zinc-200 p-3 sm:col-span-2 dark:border-zinc-800">
+      <span className="text-sm font-medium">Экономика участка</span>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        {(Object.keys(economicsFields) as EconomicsField[]).map((key) => (
+          <label key={key} className="flex flex-col gap-1 text-xs text-zinc-500">
+            {economicsFields[key].label}
+            <input
+              type="number"
+              min="0"
+              step="any"
+              value={economics[key] ?? ""}
+              onChange={(e) => onChange({ ...economics, [key]: e.target.value === "" ? null : Number(e.target.value) })}
+              className={inputClass}
+            />
+            <span className="text-zinc-400">{economicsFields[key].hint}</span>
+          </label>
+        ))}
+      </div>
+      <EconomicsSummary result={result} areaHa={areaHa} />
+    </div>
+  );
+}
+
+function EconomicsSummary({ result, areaHa }: { result: EconomicsResult; areaHa: number | null }) {
+  if (!result.ok) {
+    return <p className="text-xs text-zinc-500">Для расчёта не хватает: {result.missing.join(", ")}.</p>;
+  }
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-xs text-zinc-500">
+              <th className="py-1 pr-2 font-normal">Сценарий</th>
+              <th className="py-1 pr-2 text-right font-normal">Вложено</th>
+              <th className="py-1 pr-2 text-right font-normal">Получено</th>
+              <th className="py-1 pr-2 text-right font-normal">Итог</th>
+              <th className="py-1 text-right font-normal">С учётом стоимости денег</th>
+            </tr>
+          </thead>
+          <tbody>
+            {result.scenarios.map((s) => (
+              <tr key={s.key} className="border-t border-zinc-200 dark:border-zinc-800">
+                <td className="py-1 pr-2">{s.label}</td>
+                <td className="whitespace-nowrap py-1 pr-2 text-right">{money(s.invested)}</td>
+                <td className="whitespace-nowrap py-1 pr-2 text-right">{money(s.received)}</td>
+                <td className={`whitespace-nowrap py-1 pr-2 text-right font-medium ${moneyColor(s.profit)}`}>{money(s.profit)}</td>
+                <td className={`whitespace-nowrap py-1 text-right ${moneyColor(s.profitAfterCapital)}`}>{money(s.profitAfterCapital)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {result.breakEvenPerHa !== null && areaHa && (
+        <p className="text-xs text-zinc-500">
+          Выкуп окупается, если продать дороже {money(result.breakEvenPerHa)} за га (весь участок — {money(result.breakEvenPerHa * areaHa)}).
+        </p>
+      )}
+    </div>
+  );
+}
+
 function WeightsForm({ weights, onClose, onSaved }: { weights: Weights; onClose: () => void; onSaved: () => void }) {
   const [form, setForm] = useState<Weights>(weights);
   const total = (Object.keys(criteria) as Criterion[]).reduce((sum, k) => sum + (form[k] || 0), 0);
@@ -408,6 +495,7 @@ function PlotForm({
           onChecks={(checks) => set("checks", checks)}
           onScores={(scores) => set("scores", scores)}
         />
+        <EconomicsEditor economics={form.economics} areaHa={form.areaHa} onChange={(e) => set("economics", e)} />
         <FindingsEditor findings={form.findings} onChange={(f) => set("findings", f)} />
 
         {error && <p className="text-sm text-rose-600 sm:col-span-2">{error}</p>}
@@ -492,6 +580,22 @@ function SourceForm({ source, onClose, onSaved }: { source: Source | null; onClo
         </div>
       </form>
     </Modal>
+  );
+}
+
+// Коротко в списке: лучший сценарий с выкупом и сценарий, где выкуп сорвался
+function PlotEconomicsLine({ plot }: { plot: Plot }) {
+  const result = calculate(plot.economics, plot.areaHa);
+  if (!result.ok) return null;
+  const best = result.scenarios.find((s) => s.key !== "failed");
+  const failed = result.scenarios.find((s) => s.key === "failed")!;
+  return (
+    <span>
+      экономика:{" "}
+      {best && <span className={moneyColor(best.profit)}>{money(best.profit, true)}</span>}
+      {" / без выкупа "}
+      <span className={moneyColor(failed.profit)}>{money(failed.profit, true)}</span>
+    </span>
   );
 }
 
@@ -591,6 +695,7 @@ function PlotsView({ data, onEdit }: { data: Data; onEdit: (plot: Plot | null) =
                         {unverified ? `, не проверено: ${unverified}` : ", все проверены"}
                       </span>
                     )}
+                    <PlotEconomicsLine plot={p} />
                     <span className="ml-auto">изм. {dateFormat.format(new Date(p.updatedAt))}</span>
                   </div>
                 </button>
