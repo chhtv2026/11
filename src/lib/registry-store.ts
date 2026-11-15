@@ -7,6 +7,11 @@ import {
   defaultWeights,
   emptyChecks,
   emptyPlot,
+  emptyRoute,
+  routeSteps,
+  type Deadline,
+  type RouteEntry,
+  type RouteStep,
   emptySource,
   stopFactors,
   type CheckValue,
@@ -38,6 +43,8 @@ function normalize(data: Partial<Data>): Data {
       checks: { ...emptyChecks(), ...p.checks },
       scores: p.scores ?? {},
       economics: { ...emptyEconomics(), ...p.economics },
+      route: { ...emptyRoute(), ...p.route },
+      deadlines: p.deadlines ?? [],
     })),
     settings: { weights: { ...defaultWeights, ...data.settings?.weights } },
   };
@@ -157,6 +164,22 @@ function cleanEconomics(economics: Partial<Economics> | undefined) {
   return result;
 }
 
+function cleanRoute(route: Partial<Record<RouteStep, Partial<RouteEntry>>> | undefined) {
+  if (!route) return undefined;
+  const result = emptyRoute();
+  for (const key of Object.keys(routeSteps) as RouteStep[]) {
+    result[key] = { value: String(route[key]?.value ?? "").trim(), done: Boolean(route[key]?.done) };
+  }
+  return result;
+}
+
+function cleanDeadlines(deadlines: Partial<Deadline>[] | undefined): Deadline[] | undefined {
+  return deadlines
+    ?.filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d.date ?? "") && d.title?.trim())
+    .map((d) => ({ id: d.id || randomUUID(), date: d.date!, title: d.title!.trim(), done: Boolean(d.done) }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+}
+
 // Сложные поля проверяются отдельно; undefined — поле не прислали, оставляем как было
 function cleanPlotInput(input: Partial<PlotInput>) {
   const fields: Partial<PlotInput> = pick(emptyPlot(), input);
@@ -164,16 +187,22 @@ function cleanPlotInput(input: Partial<PlotInput>) {
   const checks = cleanChecks(input.checks);
   const scores = cleanScores(input.scores);
   const economics = cleanEconomics(input.economics);
+  const route = cleanRoute(input.route);
+  const deadlines = cleanDeadlines(input.deadlines);
   delete fields.findings;
   delete fields.checks;
   delete fields.scores;
   delete fields.economics;
+  delete fields.route;
+  delete fields.deadlines;
   return {
     ...fields,
     ...(findings && { findings }),
     ...(checks && { checks }),
     ...(scores && { scores }),
     ...(economics && { economics }),
+    ...(route && { route }),
+    ...(deadlines && { deadlines }),
   };
 }
 

@@ -2,8 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  addMonths,
   assess,
   checkValues,
+  deadlinePresets,
+  routeSteps,
+  type Deadline,
+  type RouteStep,
   criteria,
   defaultWeights,
   emptyPlot,
@@ -37,6 +42,35 @@ const rubCompact = new Intl.NumberFormat("ru-RU", { notation: "compact", maximum
 function money(value: number, compact = false) {
   const text = compact ? rubCompact.format(value) : rub.format(value);
   return `${value > 0 && compact ? "+" : ""}${text} ₽`;
+}
+
+function today() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+const dayFormat = new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "long", year: "numeric" });
+
+function formatDay(date: string) {
+  return dayFormat.format(new Date(`${date}T00:00:00`));
+}
+
+// Сколько дней до срока: отрицательное — просрочено
+function daysUntil(date: string) {
+  return Math.round((new Date(`${date}T00:00:00`).getTime() - new Date(`${today()}T00:00:00`).getTime()) / 86_400_000);
+}
+
+function dueLabel(days: number) {
+  if (days < 0) return `просрочено на ${-days} дн.`;
+  if (days === 0) return "сегодня";
+  return `через ${days} дн.`;
+}
+
+function dueColor(days: number, done: boolean) {
+  if (done) return "text-zinc-400";
+  if (days < 0) return "text-rose-700 dark:text-rose-400";
+  if (days <= 30) return "text-amber-700 dark:text-amber-400";
+  return "text-zinc-600 dark:text-zinc-400";
 }
 
 function moneyColor(value: number) {
@@ -303,6 +337,139 @@ function EconomicsEditor({
   );
 }
 
+function RouteEditor({ route, onChange }: { route: PlotInput["route"]; onChange: (r: PlotInput["route"]) => void }) {
+  const keys = Object.keys(routeSteps) as RouteStep[];
+  const done = keys.filter((k) => route[k].done).length;
+  return (
+    <div className="flex flex-col gap-3 rounded-xl border border-zinc-200 p-3 sm:col-span-2 dark:border-zinc-800">
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-medium">Правовой маршрут</span>
+        <span className="text-xs text-zinc-500">
+          пройдено {done} из {keys.length}
+        </span>
+      </div>
+      <ol className="flex flex-col gap-3">
+        {keys.map((key, i) => {
+          const step = routeSteps[key];
+          return (
+            <li key={key} className="flex gap-2">
+              <input
+                type="checkbox"
+                checked={route[key].done}
+                onChange={(e) => onChange({ ...route, [key]: { ...route[key], done: e.target.checked } })}
+                className="mt-1"
+                aria-label={`${step.label}: выяснено`}
+              />
+              <div className="flex flex-1 flex-col gap-1">
+                <span className={`text-sm ${route[key].done ? "text-zinc-400 line-through" : ""}`}>
+                  {i + 1}. {step.label} <span className="text-xs text-zinc-400 no-underline">— {step.hint}</span>
+                </span>
+                <input
+                  value={route[key].value}
+                  onChange={(e) => onChange({ ...route, [key]: { ...route[key], value: e.target.value } })}
+                  list={step.options.length ? `route-${key}` : undefined}
+                  className={inputClass}
+                  aria-label={step.label}
+                />
+                {step.options.length > 0 && (
+                  <datalist id={`route-${key}`}>
+                    {step.options.map((o) => (
+                      <option key={o} value={o} />
+                    ))}
+                  </datalist>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
+}
+
+function DeadlinesEditor({ deadlines, onChange }: { deadlines: Deadline[]; onChange: (d: Deadline[]) => void }) {
+  const [preset, setPreset] = useState(-1);
+  const [fromDate, setFromDate] = useState("");
+
+  function update(index: number, patch: Partial<Deadline>) {
+    onChange(deadlines.map((d, i) => (i === index ? { ...d, ...patch } : d)));
+  }
+
+  function add() {
+    if (preset >= 0) {
+      if (!fromDate) return;
+      const p = deadlinePresets[preset];
+      onChange([...deadlines, { id: "", date: addMonths(fromDate, p.months), title: p.title, done: false }]);
+      setFromDate("");
+    } else {
+      onChange([...deadlines, { id: "", date: today(), title: "", done: false }]);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-3 rounded-xl border border-zinc-200 p-3 sm:col-span-2 dark:border-zinc-800">
+      <span className="text-sm font-medium">Сроки и события</span>
+      {deadlines.length === 0 && <p className="text-xs text-zinc-400">Сроков пока нет.</p>}
+      <ul className="flex flex-col gap-2">
+        {deadlines.map((d, i) => {
+          const days = daysUntil(d.date);
+          return (
+            <li key={d.id || i} className="flex flex-wrap items-center gap-2">
+              <input type="checkbox" checked={d.done} onChange={(e) => update(i, { done: e.target.checked })} aria-label="Выполнено" />
+              <input
+                type="date"
+                value={d.date}
+                onChange={(e) => update(i, { date: e.target.value })}
+                className="rounded-lg border border-zinc-200 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+              />
+              <input
+                value={d.title}
+                onChange={(e) => update(i, { title: e.target.value })}
+                placeholder="Что должно произойти"
+                className={`${inputClass} min-w-48 flex-1 ${d.done ? "text-zinc-400 line-through" : ""}`}
+              />
+              <span className={`text-xs ${dueColor(days, d.done)}`}>{d.done ? "выполнено" : dueLabel(days)}</span>
+              <button type="button" onClick={() => onChange(deadlines.filter((_, j) => j !== i))} className="text-xs text-rose-600 hover:underline">
+                удалить
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+      <div className="flex flex-wrap items-center gap-2 border-t border-zinc-200 pt-3 dark:border-zinc-800">
+        <select value={preset} onChange={(e) => setPreset(Number(e.target.value))} className={`${inputClass} w-auto max-w-full`} aria-label="Шаблон срока">
+          <option value={-1}>Свой срок</option>
+          {deadlinePresets.map((p, i) => (
+            <option key={p.title} value={i}>
+              {p.title}
+            </option>
+          ))}
+        </select>
+        {preset >= 0 && (
+          <label className="flex items-center gap-1 text-xs text-zinc-500">
+            {deadlinePresets[preset].from}:
+            <input
+              type="date"
+              value={fromDate}
+              onChange={(e) => setFromDate(e.target.value)}
+              className="rounded-lg border border-zinc-200 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+            />
+          </label>
+        )}
+        <button
+          type="button"
+          onClick={add}
+          disabled={preset >= 0 && !fromDate}
+          className="text-sm text-zinc-700 underline-offset-2 hover:underline disabled:text-zinc-300 dark:text-zinc-300"
+        >
+          + добавить срок
+        </button>
+      </div>
+      <p className="text-xs text-zinc-400">Шаблоны считают дату автоматически, но сам срок по вашему участку нужно сверить с законом и документами.</p>
+    </div>
+  );
+}
+
 function EconomicsSummary({ result, areaHa }: { result: EconomicsResult; areaHa: number | null }) {
   if (!result.ok) {
     return <p className="text-xs text-zinc-500">Для расчёта не хватает: {result.missing.join(", ")}.</p>;
@@ -496,6 +663,8 @@ function PlotForm({
           onScores={(scores) => set("scores", scores)}
         />
         <EconomicsEditor economics={form.economics} areaHa={form.areaHa} onChange={(e) => set("economics", e)} />
+        <RouteEditor route={form.route} onChange={(r) => set("route", r)} />
+        <DeadlinesEditor deadlines={form.deadlines} onChange={(d) => set("deadlines", d)} />
         <FindingsEditor findings={form.findings} onChange={(f) => set("findings", f)} />
 
         {error && <p className="text-sm text-rose-600 sm:col-span-2">{error}</p>}
@@ -599,6 +768,29 @@ function PlotEconomicsLine({ plot }: { plot: Plot }) {
   );
 }
 
+// Коротко в списке: сколько шагов маршрута пройдено и ближайший невыполненный срок
+function PlotRouteLine({ plot }: { plot: Plot }) {
+  const steps = Object.values(plot.route);
+  const done = steps.filter((s) => s.done).length;
+  const next = plot.deadlines.find((d) => !d.done);
+  if (!done && !next) return null;
+  const days = next ? daysUntil(next.date) : 0;
+  return (
+    <>
+      {done > 0 && (
+        <span>
+          маршрут: {done}/{steps.length}
+        </span>
+      )}
+      {next && (
+        <span className={dueColor(days, false)}>
+          срок {formatDay(next.date)} ({dueLabel(days)})
+        </span>
+      )}
+    </>
+  );
+}
+
 function PlotsView({ data, onEdit }: { data: Data; onEdit: (plot: Plot | null) => void }) {
   const [status, setStatus] = useState<PlotStatus | "all">("all");
   const [query, setQuery] = useState("");
@@ -696,6 +888,7 @@ function PlotsView({ data, onEdit }: { data: Data; onEdit: (plot: Plot | null) =
                       </span>
                     )}
                     <PlotEconomicsLine plot={p} />
+                    <PlotRouteLine plot={p} />
                     <span className="ml-auto">изм. {dateFormat.format(new Date(p.updatedAt))}</span>
                   </div>
                 </button>
@@ -741,11 +934,74 @@ function SourcesView({ data, onEdit }: { data: Data; onEdit: (source: Source) =>
   );
 }
 
-type Editing = { kind: "plot"; item: Plot | null } | { kind: "source"; item: Source | null } | { kind: "weights" } | null;
+// Все сроки по всем участкам: просроченные, ближайшие 30 дней, позже, выполненные
+function DeadlinesView({ data, onEdit }: { data: Data; onEdit: (plot: Plot) => void }) {
+  const [showDone, setShowDone] = useState(false);
+  const items = data.plots
+    .flatMap((plot) => plot.deadlines.map((deadline) => ({ plot, deadline, days: daysUntil(deadline.date) })))
+    .sort((a, b) => a.deadline.date.localeCompare(b.deadline.date));
+
+  const groups = [
+    { title: "Просрочено", items: items.filter((i) => !i.deadline.done && i.days < 0) },
+    { title: "Ближайшие 30 дней", items: items.filter((i) => !i.deadline.done && i.days >= 0 && i.days <= 30) },
+    { title: "Позже", items: items.filter((i) => !i.deadline.done && i.days > 30) },
+  ];
+  const done = items.filter((i) => i.deadline.done);
+
+  if (items.length === 0) {
+    return (
+      <div className="rounded-2xl border border-dashed border-zinc-300 p-10 text-center text-sm text-zinc-500 dark:border-zinc-700">
+        Сроков пока нет. Их добавляют в карточке участка, в блоке «Сроки и события».
+      </div>
+    );
+  }
+
+  const row = ({ plot, deadline, days }: (typeof items)[number]) => (
+    <li key={deadline.id}>
+      <button
+        onClick={() => onEdit(plot)}
+        className="flex w-full flex-wrap items-baseline gap-x-3 gap-y-1 rounded-xl border border-zinc-200 bg-white p-3 text-left hover:border-zinc-400 dark:border-zinc-800 dark:bg-zinc-900"
+      >
+        <span className="w-36 shrink-0 text-sm font-medium">{formatDay(deadline.date)}</span>
+        <span className={`flex-1 text-sm ${deadline.done ? "text-zinc-400 line-through" : ""}`}>{deadline.title}</span>
+        <span className={`text-xs ${dueColor(days, deadline.done)}`}>{deadline.done ? "выполнено" : dueLabel(days)}</span>
+        <span className="w-full text-xs text-zinc-500">
+          {plot.cadastralNumber || plot.title}
+          {plot.district && ` · ${plot.district}`}
+        </span>
+      </button>
+    </li>
+  );
+
+  return (
+    <div className="flex flex-col gap-5">
+      {groups
+        .filter((g) => g.items.length)
+        .map((g) => (
+          <section key={g.title}>
+            <h2 className="mb-2 text-sm font-medium text-zinc-500">
+              {g.title} · {g.items.length}
+            </h2>
+            <ul className="flex flex-col gap-2">{g.items.map(row)}</ul>
+          </section>
+        ))}
+      {done.length > 0 && (
+        <section>
+          <button onClick={() => setShowDone((v) => !v)} className="mb-2 text-sm text-zinc-500 hover:text-zinc-800">
+            {showDone ? "▾" : "▸"} Выполнено · {done.length}
+          </button>
+          {showDone && <ul className="flex flex-col gap-2">{done.map(row)}</ul>}
+        </section>
+      )}
+    </div>
+  );
+}
+
+type Editing ={ kind: "plot"; item: Plot | null } | { kind: "source"; item: Source | null } | { kind: "weights" } | null;
 
 export default function Registry() {
   const [data, setData] = useState<Data | null>(null);
-  const [tab, setTab] = useState<"plots" | "sources">("plots");
+  const [tab, setTab] = useState<"plots" | "deadlines" | "sources">("plots");
   const [editing, setEditing] = useState<Editing>(null);
   const [error, setError] = useState("");
 
@@ -768,6 +1024,10 @@ export default function Registry() {
     reload();
   }
 
+  const open = data?.plots.flatMap((p) => p.deadlines.filter((d) => !d.done)) ?? [];
+  const openDeadlines = open.length;
+  const overdue = open.filter((d) => daysUntil(d.date) < 0).length;
+
   return (
     <div className="mx-auto w-full max-w-5xl px-4 py-8">
       <header className="mb-6 flex flex-wrap items-end gap-3">
@@ -783,18 +1043,21 @@ export default function Registry() {
             Веса оценки
           </button>
         )}
-        <button
-          onClick={() => setEditing(tab === "plots" ? { kind: "plot", item: null } : { kind: "source", item: null })}
-          className={`${tab === "plots" && data ? "" : "ml-auto"} rounded-lg bg-zinc-900 px-4 py-2 text-sm text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900`}
-        >
-          {tab === "plots" ? "+ Участок" : "+ Источник"}
-        </button>
+        {tab !== "deadlines" && (
+          <button
+            onClick={() => setEditing(tab === "plots" ? { kind: "plot", item: null } : { kind: "source", item: null })}
+            className={`${tab === "plots" && data ? "" : "ml-auto"} rounded-lg bg-zinc-900 px-4 py-2 text-sm text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900`}
+          >
+            {tab === "plots" ? "+ Участок" : "+ Источник"}
+          </button>
+        )}
       </header>
 
       <nav className="mb-4 flex gap-1 border-b border-zinc-200 dark:border-zinc-800">
         {(
           [
             ["plots", `Участки${data ? ` (${data.plots.length})` : ""}`],
+            ["deadlines", `Сроки${data ? ` (${openDeadlines})` : ""}${overdue ? ` · просрочено ${overdue}` : ""}`],
             ["sources", `Источники${data ? ` (${data.sources.length})` : ""}`],
           ] as const
         ).map(([key, label]) => (
@@ -813,6 +1076,8 @@ export default function Registry() {
         <p className="text-sm text-zinc-500">Загрузка…</p>
       ) : tab === "plots" ? (
         <PlotsView data={data} onEdit={(item) => setEditing({ kind: "plot", item })} />
+      ) : tab === "deadlines" ? (
+        <DeadlinesView data={data} onEdit={(item) => setEditing({ kind: "plot", item })} />
       ) : (
         <SourcesView data={data} onEdit={(item) => setEditing({ kind: "source", item })} />
       )}

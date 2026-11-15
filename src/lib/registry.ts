@@ -88,6 +88,59 @@ export function assess(plot: Pick<Plot, "checks" | "scores">, weights: Weights):
   return { kind: "scored", score: Math.round(score * 100), checksDone };
 }
 
+// Правовой маршрут (концепция, п. 5): последовательность вопросов по каждому участку
+export const routeSteps = {
+  applicant: {
+    label: "Заявитель",
+    hint: "кто подаёт и соответствует ли требованиям",
+    options: ["Гражданин", "ИП", "КФХ", "Юридическое лицо"],
+  },
+  plotState: {
+    label: "Состояние участка",
+    hint: "сформирован, нужны уточнение границ или образование",
+    options: ["Сформирован", "Нужно уточнить границы", "Нужно образовать участок"],
+  },
+  method: {
+    label: "Способ предоставления",
+    hint: "без торгов, через торги или иной законный механизм",
+    options: ["Без торгов", "Через торги", "Иной механизм"],
+  },
+  basis: { label: "Основание", hint: "конкретная статья и пункт закона", options: [] },
+  authority: { label: "Куда подавать", hint: "компетентный орган", options: [] },
+  submission: { label: "Подача", hint: "документы, форма заявления, срок рассмотрения", options: [] },
+  refusal: { label: "Если отказ", hint: "законна ли мотивировка, как обжаловать", options: [] },
+  nextSteps: { label: "Дальнейшее оформление", hint: "кадастровые работы, регистрация, договор, обязанности", options: [] },
+} as const;
+export type RouteStep = keyof typeof routeSteps;
+export type RouteEntry = { value: string; done: boolean };
+
+export function emptyRoute(): Record<RouteStep, RouteEntry> {
+  return Object.fromEntries((Object.keys(routeSteps) as RouteStep[]).map((k) => [k, { value: "", done: false }])) as Record<
+    RouteStep,
+    RouteEntry
+  >;
+}
+
+// Срок или событие по участку
+export type Deadline = { id: string; date: string; title: string; done: boolean };
+
+// Быстрые шаблоны сроков из концепции. Отсчёт — от даты, которую указывает пользователь.
+// Конкретные сроки по своему участку всё равно нужно сверить с законом и документами.
+export const deadlinePresets = [
+  { title: "Истекает решение о предварительном согласовании (ст. 39.15 ЗК РФ, общий случай — 1 год)", months: 12, from: "дата решения" },
+  { title: "Возникает право выкупа без торгов (3 года аренды, ст. 39.3 ЗК РФ — проверить условия)", months: 36, from: "дата договора аренды" },
+] as const;
+
+export function addMonths(date: string, months: number) {
+  const d = new Date(`${date}T00:00:00`);
+  const day = d.getDate();
+  d.setMonth(d.getMonth() + months);
+  // 29 февраля или 31-е число: если такого дня нет, берём последний день месяца
+  if (d.getDate() !== day) d.setDate(0);
+  // Локальная дата, без перевода в UTC — иначе в Москве съезжает на день назад
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 export type Source = {
   id: string;
   name: string;
@@ -129,6 +182,8 @@ export type Plot = {
   // Баллы 1–5; критерий без балла ещё не оценён
   scores: Partial<Record<Criterion, number>>;
   economics: Economics;
+  route: Record<RouteStep, RouteEntry>;
+  deadlines: Deadline[];
   createdAt: string;
   updatedAt: string;
 };
@@ -159,5 +214,7 @@ export function emptyPlot(): PlotInput {
     checks: emptyChecks(),
     scores: {},
     economics: emptyEconomics(),
+    route: emptyRoute(),
+    deadlines: [],
   };
 }
