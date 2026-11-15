@@ -137,8 +137,72 @@ export function addMonths(date: string, months: number) {
   d.setMonth(d.getMonth() + months);
   // 29 февраля или 31-е число: если такого дня нет, берём последний день месяца
   if (d.getDate() !== day) d.setDate(0);
-  // Локальная дата, без перевода в UTC — иначе в Москве съезжает на день назад
+  return localDate(d);
+}
+
+// Дата в формате ГГГГ-ММ-ДД по местному времени, без перевода в UTC — иначе в Москве съезжает на день назад
+export function localDate(d = new Date()) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// Паспорт годовых обязательств (концепция, п. 6): платежи, работы, подтверждения, проверки, расходы.
+// Главное — накапливать доказательства надлежащего использования земли с первого года.
+export const obligationKinds = {
+  rent: "Арендный платёж",
+  work: "Сельхозработы",
+  evidence: "Подтверждение использования",
+  inspection: "Проверка / контроль",
+  expense: "Прочий расход",
+} as const;
+export type ObligationKind = keyof typeof obligationKinds;
+
+export type Obligation = {
+  id: string;
+  date: string;
+  kind: ObligationKind;
+  title: string;
+  amount: number | null;
+  done: boolean;
+  // Чем подтверждено: акт, договор подряда, фото, платёжка — название или ссылка
+  evidence: string;
+};
+
+export type YearSummary = {
+  year: number;
+  rentPlanned: number;
+  rentPaid: number;
+  expenses: number;
+  worksDone: number;
+  worksWithoutEvidence: number;
+  evidence: number;
+  warnings: string[];
+};
+
+// Статусы, при которых земля уже на руках и её обязаны использовать
+export const holdingStatuses: PlotStatus[] = ["leased", "bought"];
+
+export function summarizeYear(obligations: Obligation[], year: number, holding: boolean): YearSummary {
+  const items = obligations.filter((o) => o.date.startsWith(`${year}-`));
+  const sum = (list: Obligation[]) => list.reduce((s, o) => s + (o.amount ?? 0), 0);
+  const rent = items.filter((o) => o.kind === "rent");
+  const works = items.filter((o) => o.kind === "work" && o.done);
+  const summary: YearSummary = {
+    year,
+    rentPlanned: sum(rent),
+    rentPaid: sum(rent.filter((o) => o.done)),
+    expenses: sum(items.filter((o) => o.done)),
+    worksDone: works.length,
+    worksWithoutEvidence: works.filter((o) => !o.evidence.trim()).length,
+    evidence: items.filter((o) => o.done && (o.kind === "evidence" || o.evidence.trim())).length,
+    warnings: [],
+  };
+  if (holding && summary.worksDone === 0) summary.warnings.push("нет выполненных сельхозработ — риск признания земли неиспользуемой");
+  if (summary.worksWithoutEvidence) summary.warnings.push(`работы без подтверждающего документа: ${summary.worksWithoutEvidence}`);
+  if (summary.rentPlanned > summary.rentPaid) {
+    const overdue = rent.filter((o) => !o.done && o.date < localDate()).length;
+    if (overdue) summary.warnings.push(`просрочено арендных платежей: ${overdue}`);
+  }
+  return summary;
 }
 
 export type Source = {
@@ -184,6 +248,7 @@ export type Plot = {
   economics: Economics;
   route: Record<RouteStep, RouteEntry>;
   deadlines: Deadline[];
+  obligations: Obligation[];
   createdAt: string;
   updatedAt: string;
 };
@@ -216,5 +281,6 @@ export function emptyPlot(): PlotInput {
     economics: emptyEconomics(),
     route: emptyRoute(),
     deadlines: [],
+    obligations: [],
   };
 }

@@ -8,8 +8,10 @@ import {
   emptyChecks,
   emptyPlot,
   emptyRoute,
+  obligationKinds,
   routeSteps,
   type Deadline,
+  type Obligation,
   type RouteEntry,
   type RouteStep,
   emptySource,
@@ -45,6 +47,7 @@ function normalize(data: Partial<Data>): Data {
       economics: { ...emptyEconomics(), ...p.economics },
       route: { ...emptyRoute(), ...p.route },
       deadlines: p.deadlines ?? [],
+      obligations: p.obligations ?? [],
     })),
     settings: { weights: { ...defaultWeights, ...data.settings?.weights } },
   };
@@ -180,6 +183,24 @@ function cleanDeadlines(deadlines: Partial<Deadline>[] | undefined): Deadline[] 
     .sort((a, b) => a.date.localeCompare(b.date));
 }
 
+function cleanObligations(obligations: Partial<Obligation>[] | undefined): Obligation[] | undefined {
+  return obligations
+    ?.filter((o) => /^\d{4}-\d{2}-\d{2}$/.test(o.date ?? "") && o.kind && o.kind in obligationKinds)
+    .map((o) => {
+      const amount = o.amount === null || o.amount === undefined ? null : Number(o.amount);
+      return {
+        id: o.id || randomUUID(),
+        date: o.date!,
+        kind: o.kind!,
+        title: String(o.title ?? "").trim(),
+        amount: amount !== null && Number.isFinite(amount) && amount >= 0 ? amount : null,
+        done: Boolean(o.done),
+        evidence: String(o.evidence ?? "").trim(),
+      };
+    })
+    .sort((a, b) => a.date.localeCompare(b.date));
+}
+
 // Сложные поля проверяются отдельно; undefined — поле не прислали, оставляем как было
 function cleanPlotInput(input: Partial<PlotInput>) {
   const fields: Partial<PlotInput> = pick(emptyPlot(), input);
@@ -189,6 +210,8 @@ function cleanPlotInput(input: Partial<PlotInput>) {
   const economics = cleanEconomics(input.economics);
   const route = cleanRoute(input.route);
   const deadlines = cleanDeadlines(input.deadlines);
+  const obligations = cleanObligations(input.obligations);
+  delete fields.obligations;
   delete fields.findings;
   delete fields.checks;
   delete fields.scores;
@@ -203,6 +226,7 @@ function cleanPlotInput(input: Partial<PlotInput>) {
     ...(economics && { economics }),
     ...(route && { route }),
     ...(deadlines && { deadlines }),
+    ...(obligations && { obligations }),
   };
 }
 

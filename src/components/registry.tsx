@@ -6,7 +6,13 @@ import {
   assess,
   checkValues,
   deadlinePresets,
+  holdingStatuses,
+  localDate,
+  obligationKinds,
   routeSteps,
+  summarizeYear,
+  type Obligation,
+  type ObligationKind,
   type Deadline,
   type RouteStep,
   criteria,
@@ -44,10 +50,7 @@ function money(value: number, compact = false) {
   return `${value > 0 && compact ? "+" : ""}${text} ₽`;
 }
 
-function today() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
+const today = () => localDate();
 
 const dayFormat = new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "long", year: "numeric" });
 
@@ -470,6 +473,169 @@ function DeadlinesEditor({ deadlines, onChange }: { deadlines: Deadline[]; onCha
   );
 }
 
+function ObligationsEditor({
+  obligations,
+  holding,
+  onChange,
+}: {
+  obligations: Obligation[];
+  holding: boolean;
+  onChange: (o: Obligation[]) => void;
+}) {
+  const currentYear = new Date().getFullYear();
+  const years = [...new Set([currentYear, ...obligations.map((o) => Number(o.date.slice(0, 4)))])].sort();
+  const [year, setYear] = useState(currentYear);
+  const summary = summarizeYear(obligations, year, holding);
+  // Индексы в общем массиве, чтобы правка строки выбранного года меняла нужную запись
+  const rows = obligations.map((o, i) => ({ o, i })).filter(({ o }) => o.date.startsWith(`${year}-`));
+
+  function update(index: number, patch: Partial<Obligation>) {
+    onChange(obligations.map((o, i) => (i === index ? { ...o, ...patch } : o)));
+  }
+
+  function add(kind: ObligationKind) {
+    const date = year === currentYear ? today() : `${year}-01-01`;
+    onChange([...obligations, { id: "", date, kind, title: "", amount: null, done: false, evidence: "" }]);
+  }
+
+  // Перенести записи года на следующий как план: удобно для ежегодной аренды и работ
+  function repeatNextYear() {
+    const next = rows.map(({ o }) => ({
+      ...o,
+      id: "",
+      date: addMonths(o.date, 12),
+      done: false,
+      evidence: "",
+    }));
+    onChange([...obligations, ...next]);
+    setYear(year + 1);
+  }
+
+  return (
+    <div className="flex flex-col gap-3 rounded-xl border border-zinc-200 p-3 sm:col-span-2 dark:border-zinc-800">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-sm font-medium">Паспорт обязательств</span>
+        <div className="flex flex-wrap gap-1">
+          {years.map((y) => (
+            <button
+              key={y}
+              type="button"
+              onClick={() => setYear(y)}
+              className={`rounded-full px-3 py-1 text-xs ${y === year ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900" : "bg-zinc-100 dark:bg-zinc-800"}`}
+            >
+              {y}
+            </button>
+          ))}
+          <button
+            type="button"
+            onClick={() => setYear(Math.max(...years) + 1)}
+            className="rounded-full px-2 py-1 text-xs text-zinc-500 hover:text-zinc-800"
+            aria-label="Следующий год"
+          >
+            +
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+        <div className="rounded-lg bg-zinc-100 p-2 dark:bg-zinc-800">
+          <div className="text-zinc-500">Аренда оплачена</div>
+          <div className="font-medium">
+            {money(summary.rentPaid)} из {money(summary.rentPlanned)}
+          </div>
+        </div>
+        <div className="rounded-lg bg-zinc-100 p-2 dark:bg-zinc-800">
+          <div className="text-zinc-500">Сельхозработ выполнено</div>
+          <div className="font-medium">{summary.worksDone}</div>
+        </div>
+        <div className="rounded-lg bg-zinc-100 p-2 dark:bg-zinc-800">
+          <div className="text-zinc-500">Подтверждений</div>
+          <div className="font-medium">{summary.evidence}</div>
+        </div>
+        <div className="rounded-lg bg-zinc-100 p-2 dark:bg-zinc-800">
+          <div className="text-zinc-500">Потрачено за год</div>
+          <div className="font-medium">{money(summary.expenses)}</div>
+        </div>
+      </div>
+      {summary.warnings.length > 0 && (
+        <ul className="flex flex-col gap-1 text-xs text-rose-700 dark:text-rose-400">
+          {summary.warnings.map((w) => (
+            <li key={w}>⚠ {w}</li>
+          ))}
+        </ul>
+      )}
+
+      {rows.length === 0 && <p className="text-xs text-zinc-400">За {year} год записей нет.</p>}
+      <ul className="flex flex-col gap-2">
+        {rows.map(({ o, i }) => (
+          <li key={o.id || `new-${i}`} className="flex flex-col gap-2 rounded-lg border border-zinc-200 p-2 dark:border-zinc-800">
+            <div className="flex flex-wrap items-center gap-2">
+              <input type="checkbox" checked={o.done} onChange={(e) => update(i, { done: e.target.checked })} aria-label="Выполнено" />
+              <input
+                type="date"
+                value={o.date}
+                onChange={(e) => e.target.value && update(i, { date: e.target.value })}
+                className="rounded-lg border border-zinc-200 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+              />
+              <select
+                value={o.kind}
+                onChange={(e) => update(i, { kind: e.target.value as ObligationKind })}
+                className="rounded-lg border border-zinc-200 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+                aria-label="Вид записи"
+              >
+                {(Object.keys(obligationKinds) as ObligationKind[]).map((k) => (
+                  <option key={k} value={k}>{obligationKinds[k]}</option>
+                ))}
+              </select>
+              <input
+                type="number"
+                min="0"
+                step="any"
+                value={o.amount ?? ""}
+                onChange={(e) => update(i, { amount: e.target.value === "" ? null : Number(e.target.value) })}
+                placeholder="₽"
+                className="w-28 rounded-lg border border-zinc-200 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+                aria-label="Сумма, ₽"
+              />
+              <button type="button" onClick={() => onChange(obligations.filter((_, j) => j !== i))} className="ml-auto text-xs text-rose-600 hover:underline">
+                удалить
+              </button>
+            </div>
+            <input
+              value={o.title}
+              onChange={(e) => update(i, { title: e.target.value })}
+              placeholder="Что именно: покос 10 га, платёж за II квартал…"
+              className={inputClass}
+              aria-label="Описание"
+            />
+            <input
+              value={o.evidence}
+              onChange={(e) => update(i, { evidence: e.target.value })}
+              placeholder="Чем подтверждено: акт, договор подряда, фото, платёжка (название или ссылка)"
+              className={inputClass}
+              aria-label="Подтверждение"
+            />
+          </li>
+        ))}
+      </ul>
+
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-zinc-200 pt-3 text-sm dark:border-zinc-800">
+        <span className="text-xs text-zinc-500">Добавить:</span>
+        {(Object.keys(obligationKinds) as ObligationKind[]).map((k) => (
+          <button key={k} type="button" onClick={() => add(k)} className="text-zinc-700 underline-offset-2 hover:underline dark:text-zinc-300">
+            + {obligationKinds[k].toLowerCase()}
+          </button>
+        ))}
+        {rows.length > 0 && (
+          <button type="button" onClick={repeatNextYear} className="ml-auto text-xs text-zinc-500 hover:text-zinc-800">
+            Повторить на {year + 1} год как план
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function EconomicsSummary({ result, areaHa }: { result: EconomicsResult; areaHa: number | null }) {
   if (!result.ok) {
     return <p className="text-xs text-zinc-500">Для расчёта не хватает: {result.missing.join(", ")}.</p>;
@@ -665,6 +831,11 @@ function PlotForm({
         <EconomicsEditor economics={form.economics} areaHa={form.areaHa} onChange={(e) => set("economics", e)} />
         <RouteEditor route={form.route} onChange={(r) => set("route", r)} />
         <DeadlinesEditor deadlines={form.deadlines} onChange={(d) => set("deadlines", d)} />
+        <ObligationsEditor
+          obligations={form.obligations}
+          holding={holdingStatuses.includes(form.status)}
+          onChange={(o) => set("obligations", o)}
+        />
         <FindingsEditor findings={form.findings} onChange={(f) => set("findings", f)} />
 
         {error && <p className="text-sm text-rose-600 sm:col-span-2">{error}</p>}
@@ -768,15 +939,33 @@ function PlotEconomicsLine({ plot }: { plot: Plot }) {
   );
 }
 
-// Коротко в списке: сколько шагов маршрута пройдено и ближайший невыполненный срок
+// Сроки участка вместе с запланированными обязательствами (платежи, работы) — для календаря
+function plotDeadlines(plot: Plot): Deadline[] {
+  const fromObligations = plot.obligations.map((o) => ({
+    id: o.id,
+    date: o.date,
+    title: `${obligationKinds[o.kind]}${o.title ? `: ${o.title}` : ""}${o.amount ? ` — ${money(o.amount)}` : ""}`,
+    done: o.done,
+  }));
+  return [...plot.deadlines, ...fromObligations].sort((a, b) => a.date.localeCompare(b.date));
+}
+
+// Коротко в списке: сколько шагов маршрута пройдено, ближайший срок и риски паспорта за текущий год
 function PlotRouteLine({ plot }: { plot: Plot }) {
   const steps = Object.values(plot.route);
   const done = steps.filter((s) => s.done).length;
-  const next = plot.deadlines.find((d) => !d.done);
-  if (!done && !next) return null;
+  const next = plotDeadlines(plot).find((d) => !d.done);
+  const holding = holdingStatuses.includes(plot.status);
+  const warnings = holding ? summarizeYear(plot.obligations, new Date().getFullYear(), true).warnings : [];
+  if (!done && !next && !warnings.length) return null;
   const days = next ? daysUntil(next.date) : 0;
   return (
     <>
+      {warnings.map((w) => (
+        <span key={w} className="text-rose-700 dark:text-rose-400">
+          ⚠ {w}
+        </span>
+      ))}
       {done > 0 && (
         <span>
           маршрут: {done}/{steps.length}
@@ -938,7 +1127,7 @@ function SourcesView({ data, onEdit }: { data: Data; onEdit: (source: Source) =>
 function DeadlinesView({ data, onEdit }: { data: Data; onEdit: (plot: Plot) => void }) {
   const [showDone, setShowDone] = useState(false);
   const items = data.plots
-    .flatMap((plot) => plot.deadlines.map((deadline) => ({ plot, deadline, days: daysUntil(deadline.date) })))
+    .flatMap((plot) => plotDeadlines(plot).map((deadline) => ({ plot, deadline, days: daysUntil(deadline.date) })))
     .sort((a, b) => a.deadline.date.localeCompare(b.deadline.date));
 
   const groups = [
@@ -951,7 +1140,7 @@ function DeadlinesView({ data, onEdit }: { data: Data; onEdit: (plot: Plot) => v
   if (items.length === 0) {
     return (
       <div className="rounded-2xl border border-dashed border-zinc-300 p-10 text-center text-sm text-zinc-500 dark:border-zinc-700">
-        Сроков пока нет. Их добавляют в карточке участка, в блоке «Сроки и события».
+        Сроков пока нет. Их добавляют в карточке участка — в блоках «Сроки и события» и «Паспорт обязательств».
       </div>
     );
   }
@@ -1024,7 +1213,7 @@ export default function Registry() {
     reload();
   }
 
-  const open = data?.plots.flatMap((p) => p.deadlines.filter((d) => !d.done)) ?? [];
+  const open = data?.plots.flatMap((p) => plotDeadlines(p).filter((d) => !d.done)) ?? [];
   const openDeadlines = open.length;
   const overdue = open.filter((d) => daysUntil(d.date) < 0).length;
 
