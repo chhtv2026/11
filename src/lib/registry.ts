@@ -47,6 +47,7 @@ export const stopFactors = {
   route: "Есть законный способ получить участок именно вам",
   restrictions: "Нет ограничений, запрещающих сельхозиспользование (ООПТ, ЗОУИТ и т. п.)",
   access: "Есть физический подъезд к участку",
+  permittedUse: "ВРИ подходит под стратегию (не ЛПХ: нужна перспектива строительства для КФХ)",
 } as const;
 export type StopFactor = keyof typeof stopFactors;
 export type CheckValue = "unknown" | "yes" | "no";
@@ -68,7 +69,18 @@ export const defaultWeights: Weights = { legal: 30, economics: 25, usageCost: 20
 export type Settings = { weights: Weights };
 
 export function emptyChecks(): Record<StopFactor, CheckValue> {
-  return { category: "unknown", rights: "unknown", route: "unknown", restrictions: "unknown", access: "unknown" };
+  return { category: "unknown", rights: "unknown", route: "unknown", restrictions: "unknown", access: "unknown", permittedUse: "unknown" };
+}
+
+// ВРИ «для ведения ЛПХ» на землях сельхозназначения не даёт строить дом для КФХ — под стратегию не подходит
+export function isPrivateFarmUse(permittedUse: string) {
+  return /лпх|личн\S*\s+подсобн/i.test(permittedUse);
+}
+
+// Итоговое значение стоп-фактора: ВРИ с ЛПХ исключает участок, что бы ни стояло вручную
+export function checkValue(plot: Pick<Plot, "checks" | "permittedUse">, key: StopFactor): CheckValue {
+  if (key === "permittedUse" && isPrivateFarmUse(plot.permittedUse)) return "no";
+  return plot.checks[key];
 }
 
 export type Assessment =
@@ -76,15 +88,15 @@ export type Assessment =
   | { kind: "incomplete"; rated: number }
   | { kind: "scored"; score: number; checksDone: boolean };
 
-export function assess(plot: Pick<Plot, "checks" | "scores">, weights: Weights): Assessment {
-  const reasons = (Object.keys(stopFactors) as StopFactor[]).filter((k) => plot.checks[k] === "no");
+export function assess(plot: Pick<Plot, "checks" | "scores" | "permittedUse">, weights: Weights): Assessment {
+  const reasons = (Object.keys(stopFactors) as StopFactor[]).filter((k) => checkValue(plot, k) === "no");
   if (reasons.length) return { kind: "excluded", reasons };
   const keys = Object.keys(criteria) as Criterion[];
   const rated = keys.filter((k) => plot.scores[k]);
   if (rated.length < keys.length) return { kind: "incomplete", rated: rated.length };
   const total = keys.reduce((sum, k) => sum + weights[k], 0) || 1;
   const score = keys.reduce((sum, k) => sum + (weights[k] * plot.scores[k]!) / 5, 0) / total;
-  const checksDone = (Object.keys(stopFactors) as StopFactor[]).every((k) => plot.checks[k] === "yes");
+  const checksDone = (Object.keys(stopFactors) as StopFactor[]).every((k) => checkValue(plot, k) === "yes");
   return { kind: "scored", score: Math.round(score * 100), checksDone };
 }
 

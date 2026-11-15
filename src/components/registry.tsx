@@ -24,6 +24,8 @@ import {
   plotStatuses,
   sourceTypes,
   stopFactors,
+  checkValue,
+  isPrivateFarmUse,
   type Assessment,
   type CheckValue,
   type Criterion,
@@ -201,7 +203,14 @@ function FindingsEditor({ findings, onChange }: { findings: Finding[]; onChange:
 
 function AssessmentBadge({ assessment }: { assessment: Assessment }) {
   if (assessment.kind === "excluded") {
-    return <span className="rounded-full bg-rose-100 px-2 py-0.5 text-xs text-rose-700 dark:bg-rose-950 dark:text-rose-300">исключён</span>;
+    return (
+      <span
+        className="rounded-full bg-rose-100 px-2 py-0.5 text-xs text-rose-700 dark:bg-rose-950 dark:text-rose-300"
+        title={`Не выполнено: ${assessment.reasons.map((k) => stopFactors[k]).join("; ")}`}
+      >
+        исключён{assessment.reasons.includes("permittedUse") ? " · ВРИ" : ""}
+      </span>
+    );
   }
   if (assessment.kind === "incomplete") {
     return <span className="text-xs text-zinc-400">оценено {assessment.rated} из 5</span>;
@@ -250,13 +259,21 @@ function AssessmentEditor({
       <div>
         <p className="mb-1 text-xs text-zinc-500">Шаг 1. Стоп-факторы — любое «нет» исключает участок</p>
         <ul className="flex flex-col gap-1">
-          {(Object.keys(stopFactors) as StopFactor[]).map((key) => (
+          {(Object.keys(stopFactors) as StopFactor[]).map((key) => {
+            const value = checkValue(form, key);
+            // ВРИ с ЛПХ выставляет «нет» сам, вручную не поменять — сначала нужно изменить ВРИ
+            const auto = value !== form.checks[key];
+            return (
             <li key={key} className="flex items-center justify-between gap-2 text-sm">
-              <span>{stopFactors[key]}</span>
+              <span>
+                {stopFactors[key]}
+                {auto && <span className="block text-xs text-rose-600">в ВРИ указано ЛПХ — участок исключается автоматически</span>}
+              </span>
               <select
-                value={form.checks[key]}
+                value={value}
+                disabled={auto}
                 onChange={(e) => onChecks({ ...form.checks, [key]: e.target.value as CheckValue })}
-                className={`shrink-0 rounded-lg border border-zinc-200 bg-white px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-900 ${checkColors[form.checks[key]]}`}
+                className={`shrink-0 rounded-lg border border-zinc-200 bg-white px-2 py-1 text-xs disabled:opacity-70 dark:border-zinc-700 dark:bg-zinc-900 ${checkColors[value]}`}
                 aria-label={stopFactors[key]}
               >
                 {(Object.keys(checkValues) as CheckValue[]).map((v) => (
@@ -264,7 +281,8 @@ function AssessmentEditor({
                 ))}
               </select>
             </li>
-          ))}
+            );
+          })}
         </ul>
       </div>
 
@@ -807,6 +825,9 @@ function PlotForm({
         </Field>
         <Field label="Вид разрешённого использования">
           <input value={form.permittedUse} onChange={(e) => set("permittedUse", e.target.value)} className={inputClass} />
+          {isPrivateFarmUse(form.permittedUse) && (
+            <span className="text-rose-600">ЛПХ — нет перспективы строительства для КФХ, участок будет исключён</span>
+          )}
         </Field>
         <Field label="Источник" wide>
           <select value={form.sourceId} onChange={(e) => set("sourceId", e.target.value)} className={inputClass}>
