@@ -1091,6 +1091,46 @@ function RightsPaste({ form, onApply }: { form: PlotInput; onApply: (patch: Part
 
 const TORGI_LOTS = "https://torgi.gov.ru/new/public/lots/reg";
 
+// Что нашлось на torgi.gov.ru и что это значит для участка.
+// rights: "no" — исключить; "unknown" — вопрос открыт, нужен ответ администрации; null — стоп-фактор не трогаем
+const torgiOutcomes = [
+  {
+    key: "none",
+    label: "Ничего не нашлось",
+    rights: null,
+    note: "торгов и извещений по участку нет (все статусы).",
+    message: "Отмечено: на торгах ничего нет.",
+  },
+  {
+    key: "empty",
+    label: "«Не состоялся» — заявок не было",
+    rights: "unknown",
+    note: "аукцион не состоялся, заявок не было — участок свободен, спрос низкий. Спросить администрацию, не будет ли повторного аукциона.",
+    message: "Участок свободен, но нужен ответ администрации о повторном аукционе.",
+  },
+  {
+    key: "cancelled",
+    label: "Отменён / аннулирован",
+    rights: "unknown",
+    note: "торги отменены или аннулированы — посмотреть причину в извещении и уточнить в администрации.",
+    message: "Посмотрите причину отмены в извещении и уточните в администрации.",
+  },
+  {
+    key: "active",
+    label: "Аукцион идёт (объявлен, приём заявок) — исключить",
+    rights: "no",
+    note: "идёт аукцион — по 10.1 сейчас не получить, можно только участвовать в аукционе. Участок исключён.",
+    message: "Участок исключён: идёт аукцион.",
+  },
+  {
+    key: "taken",
+    label: "Победитель / одна заявка / извещение по ст. 39.18 — исключить",
+    rights: "no",
+    note: "есть победитель, единственный участник или заявление по ст. 39.18 ЗК — у участка есть претендент. Участок исключён.",
+    message: "Участок исключён: у него есть претендент.",
+  },
+] as const;
+
 // Торги и извещения по участку (аукционы, ст. 39.18 ЗК) — их нет ни в НСПД, ни в справочной информации Росреестра
 function TorgiCheck({ form, onApply }: { form: PlotInput; onApply: (patch: Partial<PlotInput>) => void }) {
   const [open, setOpen] = useState(false);
@@ -1104,17 +1144,14 @@ function TorgiCheck({ form, onApply }: { form: PlotInput; onApply: (patch: Parti
     setTimeout(() => setCopied(false), 1500);
   }
 
-  function mark(found: boolean) {
+  function mark(outcome: (typeof torgiOutcomes)[number]) {
     const day = today();
-    const line = found
-      ? `torgi.gov.ru, ${formatDay(day)}: по участку есть торги или извещение — права третьих лиц, участок исключён.`
-      : `torgi.gov.ru, ${formatDay(day)}: торгов и извещений по участку нет (все статусы).`;
     onApply({
-      torgiCheckedAt: found ? form.torgiCheckedAt : day,
-      checks: found ? { ...form.checks, rights: "no" } : form.checks,
-      notes: [form.notes.trim(), line].filter(Boolean).join("\n"),
+      torgiCheckedAt: day,
+      checks: outcome.rights ? { ...form.checks, rights: outcome.rights } : form.checks,
+      notes: [form.notes.trim(), `torgi.gov.ru, ${formatDay(day)}: ${outcome.note}`].filter(Boolean).join("\n"),
     });
-    setMessage({ ok: !found, text: found ? "Участок исключён. Сохраните участок." : "Отмечено: на торгах ничего нет. Сохраните участок." });
+    setMessage({ ok: outcome.rights !== "no", text: `${outcome.message} Сохраните участок.` });
   }
 
   const button = "rounded-lg px-3 py-1.5 text-xs disabled:opacity-40";
@@ -1126,7 +1163,7 @@ function TorgiCheck({ form, onApply }: { form: PlotInput; onApply: (patch: Parti
         </button>
         {form.torgiCheckedAt && (
           <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
-            ✓ на торгах ничего нет {formatDay(form.torgiCheckedAt)}
+            ✓ торги проверены {formatDay(form.torgiCheckedAt)}
           </span>
         )}
         {number && (
@@ -1142,21 +1179,31 @@ function TorgiCheck({ form, onApply }: { form: PlotInput; onApply: (patch: Parti
         <>
           <p className="text-xs text-zinc-500">
             В «Реестре лотов» вставьте номер в поле поиска и снимите фильтр «Статус» (крестик у «Статус: 2») — так видны и
-            завершённые, и отменённые торги. Если по номеру что-то нашлось (аукцион, извещение о предоставлении по ст. 39.18
-            ЗК), на участок уже есть претендент. Чего торги не покажут: права того, кто уже обрабатывает участок (п. 4 ст. 12
-            101-ФЗ), чужое заявление по 10.1 до публикации, аренду до 1 года.
+            завершённые, и отменённые торги. Поиск выдаёт и соседние участки: сверяйте «Кадастровый номер земельного участка»
+            до последней цифры. При «Не состоялся» откройте извещение и посмотрите протокол: одна заявка — договор заключают с
+            этим участником, ни одной — участок свободен. Если лотов несколько, выбирайте по самому свежему.
           </p>
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => mark(false)}
-              className={`${button} bg-zinc-900 text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900`}
-            >
-              Ничего не нашлось
-            </button>
-            <button type="button" onClick={() => mark(true)} className={`${button} border border-rose-300 text-rose-700 hover:bg-rose-50 dark:border-rose-800 dark:text-rose-400`}>
-              Нашлись торги или извещение — исключить
-            </button>
+          <p className="text-xs text-zinc-500">
+            Чего торги не покажут: права того, кто уже обрабатывает участок (п. 4 ст. 12 101-ФЗ), чужое заявление по 10.1 до
+            публикации, аренду до 1 года.
+          </p>
+          <div className="flex flex-col items-start gap-1.5">
+            {torgiOutcomes.map((o) => (
+              <button
+                key={o.key}
+                type="button"
+                onClick={() => mark(o)}
+                className={`${button} ${
+                  o.rights === "no"
+                    ? "border border-rose-300 text-rose-700 hover:bg-rose-50 dark:border-rose-800 dark:text-rose-400"
+                    : o.rights === "unknown"
+                      ? "border border-amber-300 text-amber-800 hover:bg-amber-50 dark:border-amber-800 dark:text-amber-300"
+                      : "bg-zinc-900 text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900"
+                }`}
+              >
+                {o.label}
+              </button>
+            ))}
           </div>
         </>
       )}
