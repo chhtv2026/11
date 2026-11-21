@@ -102,9 +102,9 @@ export function assess(plot: Pick<Plot, "checks" | "scores" | "permittedUse">, w
 }
 
 // Порядок проверки участка: сначала карточка НСПД (категория, ВРИ, собственник), потом то,
-// чего НСПД не показывает, — начиная с прав третьих лиц по выписке ЕГРН
+// чего НСПД не показывает, — начиная с прав третьих лиц по справочной информации Росреестра
 const checkSteps: { factor: StopFactor; label: string }[] = [
-  { factor: "rights", label: "права третьих лиц — закажите выписку ЕГРН" },
+  { factor: "rights", label: "права третьих лиц — справочная информация Росреестра" },
   { factor: "restrictions", label: "ограничения (ЗОУИТ, ООПТ) — выписка ЕГРН, карта зон НСПД" },
   { factor: "route", label: "законный способ получить участок" },
   { factor: "access", label: "подъезд к участку" },
@@ -112,17 +112,24 @@ const checkSteps: { factor: StopFactor; label: string }[] = [
   { factor: "permittedUse", label: "вид разрешённого использования" },
 ];
 
-export type CheckProgress = { nspd: boolean; next: string | null };
+export type CheckProgress = { nspd: boolean; rights: boolean; next: string | null };
 
 // Где участок в проверке и что делать дальше; у исключённого следующего шага нет
-export function checkProgress(plot: Pick<Plot, "checks" | "scores" | "permittedUse" | "nspdCheckedAt">, vri: VriOverrides = {}): CheckProgress {
+export function checkProgress(
+  plot: Pick<Plot, "checks" | "scores" | "permittedUse" | "nspdCheckedAt" | "rightsCheckedAt">,
+  vri: VriOverrides = {},
+): CheckProgress {
   const nspd = Boolean(plot.nspdCheckedAt);
-  if ((Object.keys(stopFactors) as StopFactor[]).some((k) => checkValue(plot, k, vri) === "no")) return { nspd, next: null };
-  if (!nspd) return { nspd, next: "сверить с карточкой НСПД" };
+  const rights = Boolean(plot.rightsCheckedAt);
+  const done = (next: string | null) => ({ nspd, rights, next });
+  if ((Object.keys(stopFactors) as StopFactor[]).some((k) => checkValue(plot, k, vri) === "no")) return done(null);
+  if (!nspd) return done("сверить с карточкой НСПД");
   const step = checkSteps.find((s) => checkValue(plot, s.factor, vri) === "unknown");
-  if (step) return { nspd, next: step.label };
+  // Карточка Росреестра вставлена, но вопрос остался (свежая регистрация собственности) — нужен ответ администрации
+  if (step?.factor === "rights" && rights) return done("права третьих лиц — уточнить в администрации");
+  if (step) return done(step.label);
   const rated = (Object.keys(criteria) as Criterion[]).filter((k) => plot.scores[k]).length;
-  return { nspd, next: rated < Object.keys(criteria).length ? "оценить баллами" : null };
+  return done(rated < Object.keys(criteria).length ? "оценить баллами" : null);
 }
 
 // Правовой маршрут (концепция, п. 5): последовательность вопросов по каждому участку
@@ -277,6 +284,8 @@ export type Plot = {
   cadastralValue: number | null;
   // Когда сведения сверены с карточкой НСПД (ГГГГ-ММ-ДД) — первый шаг проверки пройден
   nspdCheckedAt: string | null;
+  // Когда права третьих лиц сверены со справочной информацией Росреестра (ГГГГ-ММ-ДД) — второй шаг
+  rightsCheckedAt: string | null;
   landCategory: string;
   permittedUse: string;
   owner: Owner;
@@ -313,6 +322,7 @@ export function emptyPlot(): PlotInput {
     areaHa: null,
     cadastralValue: null,
     nspdCheckedAt: null,
+    rightsCheckedAt: null,
     landCategory: "Земли сельскохозяйственного назначения",
     permittedUse: "",
     owner: "unknown",

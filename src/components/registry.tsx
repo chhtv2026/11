@@ -47,6 +47,7 @@ import { calculate, economicsFields, type Economics, type EconomicsField, type E
 import { classifyUse, vriClassifier, vriVerdicts, type VriOverrides, type VriVerdict } from "@/lib/vri";
 import { regionByCadastralNumber } from "@/lib/regions";
 import { extractCadastralNumbers, isAgriculturalLand, normalizeCadastralNumber, parseNspdCard } from "@/lib/nspd";
+import { ROSREESTR_ONLINE, ownershipClaimDeadline, parseRosreestrCard } from "@/lib/rosreestr";
 
 type Data = { sources: Source[]; plots: Plot[]; settings: Settings };
 
@@ -955,7 +956,7 @@ function NspdPaste({ form, onApply }: { form: PlotInput; onApply: (patch: Partia
           <p className="text-xs text-zinc-500">
             В НСПД найдите участок по номеру, откройте карточку, выделите её текст мышкой (от «Вид объекта недвижимости»
             до «Кадастровая стоимость»), скопируйте и вставьте сюда. Аренду и обременения НСПД не показывает — их смотрят
-            в выписке ЕГРН.
+            в справочной информации Росреестра (блок ниже).
           </p>
           <textarea
             value={text}
@@ -975,6 +976,115 @@ function NspdPaste({ form, onApply }: { form: PlotInput; onApply: (patch: Partia
         </>
       )}
       {message && <p className={`text-xs ${message.ok ? "text-emerald-700 dark:text-emerald-400" : "text-rose-600"}`}>{message.text}</p>}
+    </div>
+  );
+}
+
+// Второй шаг: права третьих лиц по справочной информации Росреестра (аренда, обременения, дата регистрации права)
+function RightsPaste({ form, onApply }: { form: PlotInput; onApply: (patch: Partial<PlotInput>) => void }) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  const [message, setMessage] = useState<{ tone: "ok" | "warn" | "bad"; text: string } | null>(null);
+
+  function apply() {
+    const card = parseRosreestrCard(text);
+    const current = normalizeCadastralNumber(form.cadastralNumber);
+    if (card.cadastralNumber && current && card.cadastralNumber !== current) {
+      setMessage({ tone: "bad", text: `В карточке другой участок: ${card.cadastralNumber}. Ничего не изменено.` });
+      return;
+    }
+    if (!card.hasRightsSection) {
+      setMessage({
+        tone: "bad",
+        text: "Не нашёл раздел «Сведения о правах и ограничениях (обременениях)». Скопируйте карточку целиком, до конца раздела прав.",
+      });
+      return;
+    }
+    const day = today();
+    const describe = (r: (typeof card.records)[number]) =>
+      `${r.type}${r.number ? ` № ${r.number}` : ""}${r.date ? ` от ${formatDay(r.date)}` : ""}`;
+    const lines = [`Росреестр, справочная информация, ${formatDay(day)}${card.updatedAt ? ` (данные обновлены ${formatDay(card.updatedAt)})` : ""}:`];
+    lines.push(card.records.length ? `Записи о правах: ${card.records.map(describe).join("; ")}`.replace(/\.?$/, ".") : "Записей о правах нет.");
+
+    const encumbrances = card.records.filter((r) => r.kind === "encumbrance");
+    const claim = ownershipClaimDeadline(card, day);
+    let rights: CheckValue;
+    if (encumbrances.length) {
+      rights = "no";
+      lines.push(`Есть права третьих лиц: ${encumbrances.map((r) => r.type).join(", ")} — участок исключён.`);
+      setMessage({ tone: "bad", text: `Найдено: ${encumbrances.map(describe).join("; ")} — права третьих лиц есть, участок исключён.` });
+    } else if (claim) {
+      rights = "unknown";
+      lines.push(
+        `Собственность зарегистрирована недавно (${formatDay(claim.registeredAt)}). Если участок из невостребованных долей, тот, кто его уже использует, до ${formatDay(claim.deadline)} может получить его без торгов (п. 4 ст. 12 101-ФЗ) — спросить администрацию.`,
+      );
+      setMessage({
+        tone: "warn",
+        text: `Аренды и обременений нет, но собственность зарегистрирована ${formatDay(claim.registeredAt)} — до ${formatDay(claim.deadline)} участок может уйти тому, кто его уже использует. Спросите администрацию; ответ отметьте в стоп-факторе «права третьих лиц».`,
+      });
+    } else {
+      rights = "yes";
+      lines.push("Аренды и обременений нет. Не видно в реестре: аренда до 1 года, поданные заявления, фактические пользователи.");
+      setMessage({ tone: "ok", text: "Аренды и обременений нет — второй шаг пройден. Сохраните участок." });
+    }
+    onApply({
+      rightsCheckedAt: day,
+      checks: { ...form.checks, rights },
+      notes: [form.notes.trim(), ...lines].filter(Boolean).join("\n"),
+    });
+    setText("");
+  }
+
+  const tone = { ok: "text-emerald-700 dark:text-emerald-400", warn: "text-amber-700 dark:text-amber-400", bad: "text-rose-600" };
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border border-dashed border-zinc-300 p-3 text-sm sm:col-span-2 dark:border-zinc-700">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <button type="button" onClick={() => setOpen((v) => !v)} className="font-medium hover:underline">
+          {open ? "▾" : "▸"} Вставить справочную информацию Росреестра (права третьих лиц)
+        </button>
+        {form.rightsCheckedAt && (
+          <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
+            ✓ сверено с Росреестром {formatDay(form.rightsCheckedAt)}
+          </span>
+        )}
+        <a href={ROSREESTR_ONLINE} target="_blank" rel="noreferrer" className="text-xs text-sky-700 hover:underline dark:text-sky-400">
+          открыть справочную информацию ↗
+        </a>
+      </div>
+      {open && (
+        <>
+          <p className="text-xs text-zinc-500">
+            Найдите участок по кадастровому номеру, скопируйте карточку целиком (вместе с разделом «Сведения о правах и
+            ограничениях») и вставьте сюда. Есть аренда или обременение — участок исключается. Только запись «Собственность»
+            — аренды и обременений нет.
+          </p>
+          <ul className="list-disc pl-5 text-xs text-zinc-500">
+            <li>Аренда сроком до 1 года не регистрируется и в карточке не видна.</li>
+            <li>Чужие поданные заявления (10.1, предварительное согласование, аукцион) в реестре не видны — смотрите torgi.gov.ru.</li>
+            <li>
+              Свежая регистрация собственности (меньше 6 месяцев) — если участок из невостребованных долей, его может получить
+              тот, кто уже обрабатывает (п. 4 ст. 12 101-ФЗ). Спросите администрацию.
+            </li>
+            <li>Сервис обновляется с задержкой: смотрите «Дату обновления информации».</li>
+          </ul>
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            rows={5}
+            className={inputClass}
+            placeholder={"Земельный участок\nДата обновления информации:\n…\nСведения о правах и ограничениях (обременениях)\n…"}
+          />
+          <button
+            type="button"
+            onClick={apply}
+            disabled={!text.trim()}
+            className="self-start rounded-lg bg-zinc-900 px-3 py-1.5 text-xs text-white hover:bg-zinc-700 disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900"
+          >
+            Проверить права
+          </button>
+        </>
+      )}
+      {message && <p className={`text-xs ${tone[message.tone]}`}>{message.text}</p>}
     </div>
   );
 }
@@ -1196,6 +1306,7 @@ function PlotForm({
           <ProgressLine progress={checkProgress(form, settings.vri)} />
         </p>
         <NspdPaste form={form} onApply={(patch) => setForm((f) => ({ ...f, ...patch }))} />
+        <RightsPaste form={form} onApply={(patch) => setForm((f) => ({ ...f, ...patch }))} />
         <Field label="Кадастровый номер">
           <input
             value={form.cadastralNumber}
@@ -1482,6 +1593,7 @@ function ProgressLine({ progress }: { progress: CheckProgress }) {
   return (
     <>
       {progress.nspd && <span className="text-emerald-700 dark:text-emerald-400">✓ НСПД</span>}
+      {progress.rights && <span className="text-emerald-700 dark:text-emerald-400">✓ Росреестр</span>}
       {progress.next && <span className="text-sky-700 dark:text-sky-400">далее: {progress.next}</span>}
     </>
   );

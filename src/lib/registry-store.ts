@@ -51,6 +51,7 @@ function normalize(data: Partial<Data>): Data {
       cadastralValue: p.cadastralValue ?? null,
       // Карточки, вставленные до появления отметки, узнаём по кадастровой стоимости — её даёт только НСПД
       nspdCheckedAt: p.nspdCheckedAt !== undefined ? p.nspdCheckedAt : p.cadastralValue != null ? p.updatedAt.slice(0, 10) : null,
+      rightsCheckedAt: p.rightsCheckedAt ?? null,
       checks: { ...emptyChecks(), ...p.checks },
       scores: p.scores ?? {},
       economics: { ...emptyEconomics(), ...p.economics },
@@ -215,7 +216,9 @@ function cleanObligations(obligations: Partial<Obligation>[] | undefined): Oblig
 // Сложные поля проверяются отдельно; undefined — поле не прислали, оставляем как было
 function cleanPlotInput(input: Partial<PlotInput>) {
   const fields: Partial<PlotInput> = pick(emptyPlot(), input);
-  if (fields.nspdCheckedAt !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(String(fields.nspdCheckedAt))) fields.nspdCheckedAt = null;
+  for (const key of ["nspdCheckedAt", "rightsCheckedAt"] as const) {
+    if (fields[key] !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(String(fields[key]))) fields[key] = null;
+  }
   if (fields.cadastralValue !== undefined) {
     const value = fields.cadastralValue === null ? null : Number(fields.cadastralValue);
     fields.cadastralValue = value !== null && Number.isFinite(value) && value >= 0 ? value : null;
