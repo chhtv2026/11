@@ -48,6 +48,7 @@ import { classifyUse, vriClassifier, vriVerdicts, type VriOverrides, type VriVer
 import { regionByCadastralNumber } from "@/lib/regions";
 import { extractCadastralNumbers, isAgriculturalLand, normalizeCadastralNumber, parseNspdCard } from "@/lib/nspd";
 import { ROSREESTR_ONLINE, ownershipClaimDeadline, parseRosreestrCard } from "@/lib/rosreestr";
+import { TORGI_LOTS, parseTorgiExport, type TorgiExport } from "@/lib/torgi";
 
 type Data = { sources: Source[]; plots: Plot[]; settings: Settings };
 
@@ -1106,8 +1107,6 @@ function RightsPaste({ form, onApply }: { form: PlotInput; onApply: (patch: Part
   );
 }
 
-const TORGI_LOTS = "https://torgi.gov.ru/new/public/lots/reg";
-
 // Что нашлось на torgi.gov.ru и что это значит для участка.
 // rights: "no" — исключить; "unknown" — вопрос открыт, нужен ответ администрации; null — стоп-фактор не трогаем
 const torgiOutcomes = [
@@ -1231,8 +1230,8 @@ function TorgiCheck({ form, onApply }: { form: PlotInput; onApply: (patch: Parti
 }
 
 // Читает текст первого файла из ZIP (выгрузка НСПД приходит архивом с одним CSV)
-// Читает текст всех файлов архива: ZIP из НСПД (один CSV) и Excel .xlsx с torgi.gov.ru (тоже ZIP, внутри XML)
-async function readZipText(file: File) {
+// Читает все файлы архива: ZIP из НСПД (один CSV) и Excel .xlsx с torgi.gov.ru (тоже ZIP, внутри XML)
+async function readZipEntries(file: File) {
   const buf = new Uint8Array(await file.arrayBuffer());
   const view = new DataView(buf.buffer);
   let end = buf.length - 22;
@@ -1240,21 +1239,22 @@ async function readZipText(file: File) {
   if (end < 0) throw new Error("Не удалось прочитать архив");
   const count = view.getUint16(end + 10, true);
   let entry = view.getUint32(end + 16, true);
-  const texts: string[] = [];
+  const texts = new Map<string, string>();
   for (let i = 0; i < count; i++) {
+    const name = new TextDecoder().decode(buf.slice(entry + 46, entry + 46 + view.getUint16(entry + 28, true)));
     const method = view.getUint16(entry + 10, true);
     const size = view.getUint32(entry + 20, true);
     const local = view.getUint32(entry + 42, true);
     const start = local + 30 + view.getUint16(local + 26, true) + view.getUint16(local + 28, true);
     const data = buf.slice(start, start + size);
-    if (method === 0) texts.push(new TextDecoder().decode(data));
+    if (method === 0) texts.set(name, new TextDecoder().decode(data));
     else if (method === 8) {
       const stream = new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
-      texts.push(await new Response(stream).text());
+      texts.set(name, await new Response(stream).text());
     }
     entry += 46 + view.getUint16(entry + 28, true) + view.getUint16(entry + 30, true) + view.getUint16(entry + 32, true);
   }
-  return texts.join("\n");
+  return texts;
 }
 
 function ImportForm({ plots, onClose, onSaved }: { plots: Plot[]; onClose: () => void; onSaved: () => void }) {
@@ -1262,16 +1262,27 @@ function ImportForm({ plots, onClose, onSaved }: { plots: Plot[]; onClose: () =>
   const [sourceName, setSourceName] = useState(() => `НСПД, выгрузка от ${formatDay(today())}`);
   const [owner, setOwner] = useState<keyof typeof owners>("unknown");
   const [error, setError] = useState("");
-  const [result, setResult] = useState<{ created: number; skipped: string[] } | null>(null);
+  const [result, setResult] = useState<{ created: number; skipped: string[]; updated: number } | null>(null);
+  // Выгрузка реестра лотов torgi.gov.ru: номера вместе со сведениями о последнем лоте
+  const [torgi, setTorgi] = useState<TorgiExport | null>(null);
 
-  const numbers = useMemo(() => extractCadastralNumbers(text), [text]);
+  const numbers = useMemo(() => (torgi ? torgi.items.map((i) => i.cadastralNumber) : extractCadastralNumbers(text)), [text, torgi]);
   const known = useMemo(() => new Set(plots.map((p) => normalizeCadastralNumber(p.cadastralNumber))), [plots]);
   const fresh = numbers.filter((n) => !known.has(n));
 
   async function loadFile(file: File) {
     try {
       setError("");
-      setText(/\.(zip|xlsx)$/i.test(file.name) ? await readZipText(file) : await file.text());
+      setTorgi(null);
+      if (!/\.(zip|xlsx)$/i.test(file.name)) return setText(await file.text());
+      const entries = await readZipEntries(file);
+      const sheet = [...entries.keys()].find((n) => /^xl\/worksheets\/sheet\d*\.xml$/.test(n));
+      const parsed = sheet ? parseTorgiExport(entries.get("xl/sharedStrings.xml") ?? "", entries.get(sheet)!) : null;
+      if (parsed) {
+        setTorgi(parsed);
+        setText("");
+        setSourceName(`torgi.gov.ru, выгрузка от ${formatDay(today())}`);
+      } else setText([...entries.values()].join("\n"));
     } catch (err) {
       setError((err as Error).message);
     }
@@ -1279,7 +1290,10 @@ function ImportForm({ plots, onClose, onSaved }: { plots: Plot[]; onClose: () =>
 
   async function submit() {
     try {
-      setResult(await api("/api/plots/import", "POST", { numbers: fresh, sourceName, owner }));
+      const body = torgi
+        ? { items: torgi.items, sourceName, sourceType: "auction", owner }
+        : { numbers: fresh, sourceName, owner };
+      setResult(await api("/api/plots/import", "POST", body));
     } catch (err) {
       setError((err as Error).message);
     }
@@ -1291,6 +1305,7 @@ function ImportForm({ plots, onClose, onSaved }: { plots: Plot[]; onClose: () =>
         <div className="flex flex-col gap-3 text-sm">
           <p>
             Добавлено участков: <b>{result.created}</b>. Источник — «{sourceName}», статус «Найден».
+            {result.updated > 0 && <> Уже известным участкам дописаны сведения о торгах: {result.updated}.</>}
           </p>
           <p className="text-zinc-500">
             Дальше по каждому: откройте участок, нажмите «Вставить карточку из НСПД» — заполнятся категория, ВРИ,
@@ -1342,13 +1357,38 @@ function ImportForm({ plots, onClose, onSaved }: { plots: Plot[]; onClose: () =>
             onChange={(e) => e.target.files?.[0] && loadFile(e.target.files[0])}
             className="text-sm file:mr-3 file:rounded-lg file:border-0 file:bg-zinc-200 file:px-3 file:py-1.5 file:text-sm dark:file:bg-zinc-800"
           />
-          <textarea
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            rows={6}
-            className={inputClass}
-            placeholder="Кадастровые номера — в любом виде, по одному или списком"
-          />
+          {torgi ? (
+            <div className="flex flex-col gap-1 rounded-lg bg-zinc-50 p-3 text-sm dark:bg-zinc-900">
+              <p>
+                Выгрузка torgi.gov.ru: лотов <b>{torgi.lots}</b>, разных участков <b>{torgi.items.length}</b> — по каждому
+                возьмётся последний лот (статус, даты, цена, ссылка на извещение) в заметки, площадь и собственник.
+              </p>
+              {torgi.privateLots > 0 && (
+                <p className="text-zinc-500">
+                  Пропущено лотов частной собственности и имущества должников: {torgi.privateLots} — по 10.1 такие участки не
+                  предоставляют.
+                </p>
+              )}
+              {torgi.noNumber > 0 && <p className="text-zinc-500">Лотов без кадастрового номера: {torgi.noNumber}.</p>}
+              {torgi.lots >= 500 && (
+                <p className="text-amber-700 dark:text-amber-400">
+                  В выгрузке ровно {torgi.lots} лотов — похоже, это предел сайта, и более старые торги не попали. Сузьте поиск
+                  по дате или району и выгрузите остальное отдельно.
+                </p>
+              )}
+              <button type="button" onClick={() => setTorgi(null)} className="self-start text-xs text-zinc-500 hover:text-zinc-800">
+                отменить выбор файла
+              </button>
+            </div>
+          ) : (
+            <textarea
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              rows={6}
+              className={inputClass}
+              placeholder="Кадастровые номера — в любом виде, по одному или списком"
+            />
+          )}
           <p className="text-sm">
             Найдено номеров: <b>{numbers.length}</b>
             {numbers.length > 0 && (
@@ -1374,10 +1414,10 @@ function ImportForm({ plots, onClose, onSaved }: { plots: Plot[]; onClose: () =>
           <div className="flex items-center gap-2">
             <button
               onClick={submit}
-              disabled={!fresh.length}
+              disabled={!fresh.length && !torgi?.items.length}
               className="rounded-lg bg-zinc-900 px-4 py-2 text-sm text-white hover:bg-zinc-700 disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900"
             >
-              Добавить {fresh.length || ""} в реестр
+              {torgi && !fresh.length ? "Дописать сведения о торгах" : `Добавить ${fresh.length || ""} в реестр`}
             </button>
             <button onClick={onClose} className="rounded-lg px-4 py-2 text-sm text-zinc-500 hover:text-zinc-800">
               Отмена

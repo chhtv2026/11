@@ -308,16 +308,47 @@ export function updatePlot(id: string, input: Partial<PlotInput>) {
   });
 }
 
-export type ImportResult = { created: number; skipped: string[]; sourceId: string };
+export type ImportResult = { created: number; skipped: string[]; updated: number; sourceId: string };
+
+// Участок из выгрузки торгов: номер плюс то, что о нём известно из лота
+type ImportItem = { cadastralNumber: string; owner?: Owner; areaHa?: number; note?: string };
+
+function cleanImportItems(value: unknown): ImportItem[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((v) => {
+    if (!v || typeof v !== "object") return [];
+    const item = v as Record<string, unknown>;
+    const cadastralNumber = normalizeCadastralNumber(String(item.cadastralNumber ?? ""));
+    if (!/^\d{2}:\d{2}:\d{7}:\d+$/.test(cadastralNumber)) return [];
+    const area = Number(item.areaHa);
+    return [
+      {
+        cadastralNumber,
+        owner: typeof item.owner === "string" && item.owner in owners ? (item.owner as Owner) : undefined,
+        areaHa: Number.isFinite(area) && area > 0 ? area : undefined,
+        note: typeof item.note === "string" ? item.note.slice(0, 2000) : undefined,
+      },
+    ];
+  });
+}
 
 // Массовое добавление кандидатов по списку кадастровых номеров (выгрузка НСПД и т. п.).
 // Уже известные номера пропускаем; район подставляем по коду кадастрового района (60:10 → как у других участков).
-export function importPlots(input: { numbers?: unknown; sourceName?: unknown; owner?: unknown }): Promise<ImportResult> {
+export function importPlots(input: {
+  numbers?: unknown;
+  items?: unknown;
+  sourceName?: unknown;
+  sourceType?: unknown;
+  owner?: unknown;
+}): Promise<ImportResult> {
   return mutate((data) => {
     const now = new Date().toISOString();
     const numbers = [...new Set((Array.isArray(input.numbers) ? input.numbers : []).map((n) => normalizeCadastralNumber(String(n))))].filter(
       (n) => /^\d{2}:\d{2}:\d{7}:\d+$/.test(n),
     );
+    const items = new Map<string, ImportItem>(numbers.map((n) => [n, { cadastralNumber: n }]));
+    for (const item of cleanImportItems(input.items)) items.set(item.cadastralNumber, item);
+    const fromTorgi = input.sourceType === "auction";
     const known = new Set(data.plots.map((p) => normalizeCadastralNumber(p.cadastralNumber)));
 
     const sourceName = String(input.sourceName ?? "").trim() || "НСПД";
@@ -326,9 +357,11 @@ export function importPlots(input: { numbers?: unknown; sourceName?: unknown; ow
       source = {
         ...emptySource(),
         name: sourceName,
-        type: "map",
-        url: "https://nspd.gov.ru/map?thematic=PKK",
-        notes: "Список номеров из поиска НСПД. Сведения по участкам заполняются вставкой карточки НСПД.",
+        type: fromTorgi ? "auction" : "map",
+        url: fromTorgi ? "https://torgi.gov.ru/new/public/lots/reg" : "https://nspd.gov.ru/map?thematic=PKK",
+        notes: fromTorgi
+          ? "Выгрузка реестра лотов torgi.gov.ru. По каждому участку в заметках — последний лот; проверьте протокол."
+          : "Список номеров из поиска НСПД. Сведения по участкам заполняются вставкой карточки НСПД.",
         id: randomUUID(),
         createdAt: now,
         updatedAt: now,
@@ -341,9 +374,19 @@ export function importPlots(input: { numbers?: unknown; sourceName?: unknown; ow
 
     const skipped: string[] = [];
     let created = 0;
-    for (const number of numbers) {
+    let updated = 0;
+    const listNote = `Добавлен списком из ${fromTorgi ? "выгрузки torgi.gov.ru" : "НСПД"}. Откройте карточку участка в НСПД и вставьте её текст — поля заполнятся.`;
+    for (const [number, item] of items) {
       if (known.has(number)) {
         skipped.push(number);
+        // Уже известному участку дописываем сведения о торгах, если такой записи ещё нет
+        const plot = data.plots.find((p) => normalizeCadastralNumber(p.cadastralNumber) === number);
+        const link = item.note?.match(/https:\/\/\S+/)?.[0];
+        if (plot && item.note && !(link && plot.notes.includes(link))) {
+          plot.notes = [plot.notes.trim(), item.note].filter(Boolean).join("\n");
+          plot.updatedAt = now;
+          updated++;
+        }
         continue;
       }
       data.plots.push({
@@ -351,9 +394,10 @@ export function importPlots(input: { numbers?: unknown; sourceName?: unknown; ow
         cadastralNumber: number,
         region: regionByCadastralNumber(number) ?? emptyPlot().region,
         district: districts.get(number.slice(0, 5)) ?? "",
-        owner,
+        owner: item.owner ?? owner,
+        areaHa: item.areaHa ?? null,
         sourceId: source.id,
-        notes: "Добавлен списком из НСПД. Откройте карточку участка в НСПД и вставьте её текст — поля заполнятся.",
+        notes: [listNote, item.note].filter(Boolean).join("\n"),
         id: randomUUID(),
         createdAt: now,
         updatedAt: now,
@@ -361,7 +405,7 @@ export function importPlots(input: { numbers?: unknown; sourceName?: unknown; ow
       known.add(number);
       created++;
     }
-    return { created, skipped, sourceId: source.id };
+    return { created, skipped, updated, sourceId: source.id };
   });
 }
 
