@@ -5,6 +5,7 @@ import {
   checkValues,
   criteria,
   defaultWeights,
+  TORGI_EXPORT_FRESH_DAYS,
   emptyChecks,
   emptyPlot,
   emptyRoute,
@@ -63,7 +64,11 @@ function normalize(data: Partial<Data>): Data {
       deadlines: p.deadlines ?? [],
       obligations: p.obligations ?? [],
     })),
-    settings: { weights: { ...defaultWeights, ...data.settings?.weights }, vri: data.settings?.vri ?? {} },
+    settings: {
+      weights: { ...defaultWeights, ...data.settings?.weights },
+      vri: data.settings?.vri ?? {},
+      torgiExport: data.settings?.torgiExport ?? null,
+    },
   };
 }
 
@@ -349,6 +354,11 @@ function cleanImportItems(value: unknown): ImportItem[] {
   });
 }
 
+// Полная выгрузка торгов годится для отметки новых участков, пока ей не больше TORGI_EXPORT_FRESH_DAYS дней
+function torgiExportFresh(date: string) {
+  return Date.now() - new Date(`${date}T00:00:00`).getTime() <= TORGI_EXPORT_FRESH_DAYS * 86_400_000;
+}
+
 // Массовое добавление кандидатов по списку кадастровых номеров (выгрузка НСПД и т. п.).
 // Уже известные номера пропускаем; район подставляем по коду кадастрового района (60:10 → как у других участков).
 export function importPlots(input: {
@@ -360,6 +370,8 @@ export function importPlots(input: {
   // Выгрузка torgi.gov.ru со всеми торгами по сельхозземле: участкам этих районов, которых в ней нет, ставим отметку
   absentDistrictCodes?: unknown;
   absentCheckedAt?: unknown;
+  // Все номера с лотами в этой выгрузке — запоминаем, чтобы отмечать и участки, добавленные позже
+  exportNumbers?: unknown;
 }): Promise<ImportResult> {
   return mutate((data) => {
     const now = new Date().toISOString();
@@ -455,14 +467,26 @@ export function importPlots(input: {
       known.add(number);
       created++;
     }
-    // Участки районов из выгрузки, которых в ней нет: по ним торгов не было (на дату выгрузки)
+    // Участки районов из выгрузки, которых в ней нет: по ним торгов не было (на дату выгрузки).
+    // Полную выгрузку запоминаем; при импорте списков НСПД так же отмечаем новые участки, пока выгрузка свежая.
     let absentMarked = 0;
-    const absentCodes = new Set(Array.isArray(input.absentDistrictCodes) ? input.absentDistrictCodes.map(String) : []);
-    if (absentCodes.size && isDay(input.absentCheckedAt)) {
-      const day = input.absentCheckedAt;
+    let absent: { day: string; codes: Set<string>; numbers: Set<string>; onlyNew: boolean } | null = null;
+    const absentCodes = Array.isArray(input.absentDistrictCodes) ? input.absentDistrictCodes.map(String) : [];
+    if (fromTorgi && absentCodes.length && isDay(input.absentCheckedAt)) {
+      const exportNumbers = (Array.isArray(input.exportNumbers) ? input.exportNumbers : []).map((n) => normalizeCadastralNumber(String(n)));
+      const numbersSet = new Set([...exportNumbers, ...items.keys()]);
+      data.settings.torgiExport = { date: input.absentCheckedAt, districtCodes: absentCodes, numbers: [...numbersSet] };
+      absent = { day: input.absentCheckedAt, codes: new Set(absentCodes), numbers: numbersSet, onlyNew: false };
+    } else if (!fromTorgi && data.settings.torgiExport && torgiExportFresh(data.settings.torgiExport.date)) {
+      const info = data.settings.torgiExport;
+      absent = { day: info.date, codes: new Set(info.districtCodes), numbers: new Set(info.numbers), onlyNew: true };
+    }
+    if (absent) {
+      const day = absent.day;
       for (const plot of data.plots) {
         const number = normalizeCadastralNumber(plot.cadastralNumber);
-        if (!absentCodes.has(number.slice(0, 5)) || items.has(number)) continue;
+        if (!absent.codes.has(number.slice(0, 5)) || absent.numbers.has(number)) continue;
+        if (absent.onlyNew && plot.createdAt !== now) continue;
         if (plot.torgiCheckedAt || plot.checks.rights === "no") continue;
         plot.torgiCheckedAt = day;
         plot.notes = [plot.notes.trim(), `torgi.gov.ru, выгрузка от ${day.split("-").reverse().join(".")}: лотов по участку нет.`]

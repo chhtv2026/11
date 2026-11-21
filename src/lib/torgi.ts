@@ -42,6 +42,8 @@ export type TorgiExport = {
   allStatuses: boolean;
   // Кадастровые районы (60:19 и т. п.), лоты которых есть в выгрузке, — включая частные
   districtCodes: string[];
+  // Все номера участков с лотами, включая частные
+  allNumbers: string[];
 };
 
 function outcomeOf(status: string, finalPrice: string): TorgiOutcome {
@@ -99,7 +101,7 @@ export function parseTorgiExport(sharedXml: string, sheetXml: string): TorgiExpo
   const get = (r: Row, name: string) => (r[col[name]] ?? "").trim();
 
   const outcomes = Object.fromEntries(Object.keys(torgiOutcomes).map((k) => [k, 0])) as Record<TorgiOutcome, number>;
-  const result: TorgiExport = { lots: 0, items: [], privateLots: 0, privateNumbers: 0, noNumber: 0, outcomes, allStatuses: false, districtCodes: [] };
+  const result: TorgiExport = { lots: 0, items: [], privateLots: 0, privateNumbers: 0, noNumber: 0, outcomes, allStatuses: false, districtCodes: [], allNumbers: [] };
   const codes = new Set<string>();
   const byNumber = new Map<string, Row[]>();
   const privateSet = new Set<string>();
@@ -127,6 +129,7 @@ export function parseTorgiExport(sharedXml: string, sheetXml: string): TorgiExpo
   }
   result.privateNumbers = [...privateSet].filter((n) => !byNumber.has(n)).length;
   result.districtCodes = [...codes].sort();
+  result.allNumbers = [...new Set([...byNumber.keys(), ...privateSet])];
 
   for (const [number, lots] of byNumber) {
     // Решаем по самому свежему лоту: более ранние могли быть до повторного выставления

@@ -37,6 +37,8 @@ import {
   type PlotInput,
   type PlotStatus,
   type Settings,
+  type TorgiExportInfo,
+  TORGI_EXPORT_FRESH_DAYS,
   type Source,
   type SourceInput,
   type StopFactor,
@@ -1237,6 +1239,28 @@ function TorgiCheck({ form, onApply }: { form: PlotInput; onApply: (patch: Parti
 }
 
 // Читает текст первого файла из ZIP (выгрузка НСПД приходит архивом с одним CSV)
+// При импорте из НСПД: новые участки районов последней полной выгрузки торгов без лотов получат «✓ торги»
+function TorgiExportHint({ info, numbers }: { info: TorgiExportInfo; numbers: string[] }) {
+  const age = Math.floor((Date.now() - new Date(`${info.date}T00:00:00`).getTime()) / 86_400_000);
+  const codes = new Set(info.districtCodes);
+  const withLots = new Set(info.numbers);
+  const marked = numbers.filter((n) => codes.has(n.slice(0, 5)) && !withLots.has(n)).length;
+  if (age > TORGI_EXPORT_FRESH_DAYS) {
+    return (
+      <p className="text-sm text-amber-700 dark:text-amber-400">
+        Последней полной выгрузке торгов уже {age} дн. (от {formatDay(info.date)}) — отметку «✓ торги» новым участкам не ставлю.
+        Выгрузите торги заново (регион и категория, без фильтров ВРИ и статуса) и импортируйте с галочкой.
+      </p>
+    );
+  }
+  return (
+    <p className="text-sm text-emerald-700 dark:text-emerald-400">
+      По полной выгрузке торгов от {formatDay(info.date)} новым участкам без лотов поставится «✓ торги»: <b>{marked}</b>
+      {numbers.length - marked > 0 && <> (остальные — из районов не из выгрузки или с лотами)</>}.
+    </p>
+  );
+}
+
 // Читает все файлы архива: ZIP из НСПД (один CSV) и Excel .xlsx с torgi.gov.ru (тоже ZIP, внутри XML)
 async function readZipEntries(file: File) {
   const buf = new Uint8Array(await file.arrayBuffer());
@@ -1264,7 +1288,17 @@ async function readZipEntries(file: File) {
   return texts;
 }
 
-function ImportForm({ plots, onClose, onSaved }: { plots: Plot[]; onClose: () => void; onSaved: () => void }) {
+function ImportForm({
+  plots,
+  settings,
+  onClose,
+  onSaved,
+}: {
+  plots: Plot[];
+  settings: Settings;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
   const [text, setText] = useState("");
   const [sourceName, setSourceName] = useState(() => `НСПД, выгрузка от ${formatDay(today())}`);
   const [owner, setOwner] = useState<keyof typeof owners>("unknown");
@@ -1320,7 +1354,9 @@ function ImportForm({ plots, onClose, onSaved }: { plots: Plot[]; onClose: () =>
             sourceName,
             sourceType: "auction",
             owner,
-            ...(complete && canMarkAbsent ? { absentDistrictCodes: torgi.districtCodes, absentCheckedAt: day } : {}),
+            ...(complete && canMarkAbsent
+              ? { absentDistrictCodes: torgi.districtCodes, absentCheckedAt: day, exportNumbers: torgi.allNumbers }
+              : {}),
           }
         : { numbers: fresh, sourceName, owner };
       setResult(await api("/api/plots/import", "POST", body));
@@ -1459,6 +1495,9 @@ function ImportForm({ plots, onClose, onSaved }: { plots: Plot[]; onClose: () =>
               className={inputClass}
               placeholder="Кадастровые номера — в любом виде, по одному или списком"
             />
+          )}
+          {!torgi && settings.torgiExport && (
+            <TorgiExportHint info={settings.torgiExport} numbers={fresh} />
           )}
           <p className="text-sm">
             Найдено номеров: <b>{numbers.length}</b>
@@ -2370,7 +2409,7 @@ export default function Registry() {
         <WeightsForm weights={data.settings.weights} onClose={() => setEditing(null)} onSaved={saved} />
       )}
       {data && editing?.kind === "import" && (
-        <ImportForm plots={data.plots} onClose={() => setEditing(null)} onSaved={saved} />
+        <ImportForm plots={data.plots} settings={data.settings} onClose={() => setEditing(null)} onSaved={saved} />
       )}
       {data && editing?.kind === "source" && <SourceForm source={editing.item} plots={data.plots} onClose={() => setEditing(null)} onSaved={saved} />}
     </div>

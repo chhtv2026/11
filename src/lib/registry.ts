@@ -67,7 +67,12 @@ export type Weights = Record<Criterion, number>;
 // Условные веса из концепции; подлежат проверке на реальных случаях
 export const defaultWeights: Weights = { legal: 30, economics: 25, usageCost: 20, liquidity: 15, potential: 10 };
 
-export type Settings = { weights: Weights; vri: VriOverrides };
+// Последняя полная выгрузка torgi.gov.ru (все торги по сельхозземле): по ней отмечаем и участки, добавленные позже
+export type TorgiExportInfo = { date: string; districtCodes: string[]; numbers: string[] };
+// Сколько дней полная выгрузка торгов считается свежей для отметки новых участков
+export const TORGI_EXPORT_FRESH_DAYS = 30;
+
+export type Settings = { weights: Weights; vri: VriOverrides; torgiExport: TorgiExportInfo | null };
 
 export function emptyChecks(): Record<StopFactor, CheckValue> {
   return { category: "unknown", rights: "unknown", route: "unknown", restrictions: "unknown", access: "unknown", permittedUse: "unknown" };
