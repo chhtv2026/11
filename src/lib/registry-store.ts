@@ -311,7 +311,7 @@ export function updatePlot(id: string, input: Partial<PlotInput>) {
 export type ImportResult = { created: number; skipped: string[]; updated: number; sourceId: string };
 
 // Участок из выгрузки торгов: номер плюс то, что о нём известно из лота
-type ImportItem = { cadastralNumber: string; owner?: Owner; areaHa?: number; note?: string };
+type ImportItem = { cadastralNumber: string; owner?: Owner; areaHa?: number; note?: string; singleBid?: boolean };
 
 function cleanImportItems(value: unknown): ImportItem[] {
   if (!Array.isArray(value)) return [];
@@ -327,6 +327,7 @@ function cleanImportItems(value: unknown): ImportItem[] {
         owner: typeof item.owner === "string" && item.owner in owners ? (item.owner as Owner) : undefined,
         areaHa: Number.isFinite(area) && area > 0 ? area : undefined,
         note: typeof item.note === "string" ? item.note.slice(0, 2000) : undefined,
+        singleBid: item.singleBid === true,
       },
     ];
   });
@@ -396,6 +397,8 @@ export function importPlots(input: {
         district: districts.get(number.slice(0, 5)) ?? "",
         owner: item.owner ?? owner,
         areaHa: item.areaHa ?? null,
+        // Единственная заявка на последних торгах — у участка есть арендатор, сразу в исключённые
+        checks: item.singleBid ? { ...emptyChecks(), rights: "no" } : emptyChecks(),
         sourceId: source.id,
         notes: [listNote, item.note].filter(Boolean).join("\n"),
         id: randomUUID(),

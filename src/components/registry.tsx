@@ -1363,6 +1363,10 @@ function ImportForm({ plots, onClose, onSaved }: { plots: Plot[]; onClose: () =>
                 Выгрузка torgi.gov.ru: лотов <b>{torgi.lots}</b>, разных участков <b>{torgi.items.length}</b> — по каждому
                 возьмётся последний лот (статус, даты, цена, ссылка на извещение) в заметки, площадь и собственник.
               </p>
+              <p>
+                Заявок, по всей видимости, не было: <b>{torgi.items.length - torgi.singleBid}</b> · была единственная заявка
+                (указана итоговая цена): <b>{torgi.singleBid}</b> — такие новые участки сразу уйдут в исключённые.
+              </p>
               {torgi.privateLots > 0 && (
                 <p className="text-zinc-500">
                   Пропущено лотов частной собственности и имущества должников: {torgi.privateLots} — по 10.1 такие участки не

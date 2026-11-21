@@ -10,6 +10,9 @@ export type TorgiItem = {
   owner?: Owner;
   areaHa?: number;
   lots: number;
+  // По последнему лоту: «Итоговая цена» у несостоявшегося аукциона заполнена, когда была единственная заявка
+  // (договор с этим участником); пустая — заявок не было или никого не допустили
+  singleBid: boolean;
   note: string;
 };
 
@@ -20,6 +23,7 @@ export type TorgiExport = {
   privateLots: number;
   privateNumbers: number;
   noNumber: number;
+  singleBid: number;
 };
 
 type Row = Record<string, string>;
@@ -68,7 +72,7 @@ export function parseTorgiExport(sharedXml: string, sheetXml: string): TorgiExpo
   for (const [letter, name] of Object.entries(rows[headerAt])) if (name && !(name in col)) col[name] = letter;
   const get = (r: Row, name: string) => (r[col[name]] ?? "").trim();
 
-  const result: TorgiExport = { lots: 0, items: [], privateLots: 0, privateNumbers: 0, noNumber: 0 };
+  const result: TorgiExport = { lots: 0, items: [], privateLots: 0, privateNumbers: 0, noNumber: 0, singleBid: 0 };
   const byNumber = new Map<string, Row[]>();
   const privateSet = new Set<string>();
   for (const r of rows.slice(headerAt + 1)) {
@@ -101,18 +105,23 @@ export function parseTorgiExport(sharedXml: string, sheetXml: string): TorgiExpo
     const last = sorted[0];
     const area = get(last, "Характеристики имущества").match(/Площадь земельного участка\s*:\s*([\d.]+)\s*м/)?.[1];
     const price = Number(get(last, "Начальная цена"));
+    const singleBid = Boolean(get(last, "Итоговая цена")) && /не состоял/i.test(get(last, "Статус лота"));
+    if (singleBid) result.singleBid++;
     const deal = /аренд/i.test(get(last, "Описание лота")) ? "аренда" : /продаж/i.test(get(last, "Описание лота")) ? "продажа" : "";
     const parts = [
       `torgi.gov.ru: лотов по участку в выгрузке — ${lots.length}.`,
       `Последний: «${get(last, "Статус лота")}»${deal ? `, ${deal}` : ""}, приём заявок ${shortDate(get(last, "Дата и время начала подачи заявок"))}–${shortDate(get(last, "Дата и время окончания подачи заявок"))}${Number.isFinite(price) && price > 0 ? `, начальная цена ${price.toLocaleString("ru-RU")} ₽` : ""}.`,
       `Извещение: ${get(last, "Ссылка на извещение в ОЧ Реестра извещений") || get(last, "Номер извещения")}`,
-      "Проверьте протокол (причина «не состоялся») и нет ли лота новее этой выгрузки.",
+      singleBid
+        ? "Указана итоговая цена — по всей видимости, единственная заявка, договор заключают с этим участником. Участок исключён; если в протоколе другое — верните стоп-фактор «права третьих лиц»."
+        : "Итоговой цены нет — по всей видимости, заявок не было. Подтвердите по протоколу и проверьте, нет ли лота новее этой выгрузки.",
     ];
     result.items.push({
       cadastralNumber: number,
       owner: parseOwner(get(last, "Форма собственности")),
       areaHa: area ? Math.round(Number(area)) / 10_000 : undefined,
       lots: lots.length,
+      singleBid,
       note: parts.join(" "),
     });
   }
