@@ -27,7 +27,9 @@ import {
   stopFactors,
   workingStatuses,
   checkValue,
+  checkProgress,
   type Assessment,
+  type CheckProgress,
   type CheckValue,
   type Criterion,
   type Finding,
@@ -912,9 +914,14 @@ function NspdPaste({ form, onApply }: { form: PlotInput; onApply: (patch: Partia
       });
       return;
     }
+    patch.nspdCheckedAt = today();
+    if (form.status === "found") patch.status = "checking";
     onApply(patch);
     setText("");
-    setMessage({ ok: true, text: `Заполнено: ${filled.join(", ")}. Проверьте и сохраните участок.` });
+    setMessage({
+      ok: true,
+      text: `Заполнено: ${filled.join(", ")}. Первый шаг пройден${form.status === "found" ? ", статус — «На проверке»" : ""}. Сохраните участок.`,
+    });
   }
 
   async function copyNumber() {
@@ -929,6 +936,11 @@ function NspdPaste({ form, onApply }: { form: PlotInput; onApply: (patch: Partia
         <button type="button" onClick={() => setOpen((v) => !v)} className="font-medium hover:underline">
           {open ? "▾" : "▸"} Вставить карточку из НСПД
         </button>
+        {form.nspdCheckedAt && (
+          <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
+            ✓ сверено с НСПД {formatDay(form.nspdCheckedAt)}
+          </span>
+        )}
         {form.cadastralNumber.trim() && (
           <button type="button" onClick={copyNumber} className="text-xs text-zinc-500 hover:text-zinc-800">
             {copied ? "номер скопирован" : "скопировать номер"}
@@ -1180,6 +1192,9 @@ function PlotForm({
             </span>
           </div>
         )}
+        <p className="flex flex-wrap gap-x-3 text-sm sm:col-span-2">
+          <ProgressLine progress={checkProgress(form, settings.vri)} />
+        </p>
         <NspdPaste form={form} onApply={(patch) => setForm((f) => ({ ...f, ...patch }))} />
         <Field label="Кадастровый номер">
           <input
@@ -1462,7 +1477,29 @@ const districtOf = (p: Plot) => p.district.split(",")[0].trim() || "Район �
 
 type Place = { region: string | null; district: string | null };
 
-function PlotCard({ plot: p, assessment, sourceName, onEdit }: { plot: Plot; assessment: Assessment; sourceName?: string; onEdit: () => void }) {
+// Где участок в проверке: отметка «НСПД ✓» и следующий шаг
+function ProgressLine({ progress }: { progress: CheckProgress }) {
+  return (
+    <>
+      {progress.nspd && <span className="text-emerald-700 dark:text-emerald-400">✓ НСПД</span>}
+      {progress.next && <span className="text-sky-700 dark:text-sky-400">далее: {progress.next}</span>}
+    </>
+  );
+}
+
+function PlotCard({
+  plot: p,
+  assessment,
+  progress,
+  sourceName,
+  onEdit,
+}: {
+  plot: Plot;
+  assessment: Assessment;
+  progress: CheckProgress;
+  sourceName?: string;
+  onEdit: () => void;
+}) {
   const unverified = p.findings.filter((f) => !f.verified).length;
   return (
     <button
@@ -1478,6 +1515,7 @@ function PlotCard({ plot: p, assessment, sourceName, onEdit }: { plot: Plot; ass
         </span>
       </div>
       <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-zinc-500">
+        <ProgressLine progress={progress} />
         {p.district.includes(",") && <span>{p.district.split(",").slice(1).join(",").trim()}</span>}
         {p.areaHa !== null && <span>{p.areaHa.toLocaleString("ru-RU")} га</span>}
         <span>{owners[p.owner]}</span>
@@ -1679,6 +1717,7 @@ function PlotsView({ data, onEdit }: { data: Data; onEdit: (plot: Plot | null) =
                           <PlotCard
                             plot={p}
                             assessment={assessments.get(p.id)!}
+                            progress={checkProgress(p, data.settings.vri)}
                             sourceName={sourceNames.get(p.sourceId)}
                             onEdit={() => onEdit(p)}
                           />

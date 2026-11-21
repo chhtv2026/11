@@ -101,6 +101,30 @@ export function assess(plot: Pick<Plot, "checks" | "scores" | "permittedUse">, w
   return { kind: "scored", score: Math.round(score * 100), checksDone };
 }
 
+// Порядок проверки участка: сначала карточка НСПД (категория, ВРИ, собственник), потом то,
+// чего НСПД не показывает, — начиная с прав третьих лиц по выписке ЕГРН
+const checkSteps: { factor: StopFactor; label: string }[] = [
+  { factor: "rights", label: "права третьих лиц — закажите выписку ЕГРН" },
+  { factor: "restrictions", label: "ограничения (ЗОУИТ, ООПТ) — выписка ЕГРН, карта зон НСПД" },
+  { factor: "route", label: "законный способ получить участок" },
+  { factor: "access", label: "подъезд к участку" },
+  { factor: "category", label: "категория земель" },
+  { factor: "permittedUse", label: "вид разрешённого использования" },
+];
+
+export type CheckProgress = { nspd: boolean; next: string | null };
+
+// Где участок в проверке и что делать дальше; у исключённого следующего шага нет
+export function checkProgress(plot: Pick<Plot, "checks" | "scores" | "permittedUse" | "nspdCheckedAt">, vri: VriOverrides = {}): CheckProgress {
+  const nspd = Boolean(plot.nspdCheckedAt);
+  if ((Object.keys(stopFactors) as StopFactor[]).some((k) => checkValue(plot, k, vri) === "no")) return { nspd, next: null };
+  if (!nspd) return { nspd, next: "сверить с карточкой НСПД" };
+  const step = checkSteps.find((s) => checkValue(plot, s.factor, vri) === "unknown");
+  if (step) return { nspd, next: step.label };
+  const rated = (Object.keys(criteria) as Criterion[]).filter((k) => plot.scores[k]).length;
+  return { nspd, next: rated < Object.keys(criteria).length ? "оценить баллами" : null };
+}
+
 // Правовой маршрут (концепция, п. 5): последовательность вопросов по каждому участку
 export const routeSteps = {
   applicant: {
@@ -251,6 +275,8 @@ export type Plot = {
   areaHa: number | null;
   // Кадастровая стоимость, ₽ — от неё часто считается цена выкупа и арендная плата
   cadastralValue: number | null;
+  // Когда сведения сверены с карточкой НСПД (ГГГГ-ММ-ДД) — первый шаг проверки пройден
+  nspdCheckedAt: string | null;
   landCategory: string;
   permittedUse: string;
   owner: Owner;
@@ -286,6 +312,7 @@ export function emptyPlot(): PlotInput {
     district: "",
     areaHa: null,
     cadastralValue: null,
+    nspdCheckedAt: null,
     landCategory: "Земли сельскохозяйственного назначения",
     permittedUse: "",
     owner: "unknown",
