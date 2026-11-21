@@ -25,7 +25,6 @@ import {
   sourceTypes,
   stopFactors,
   checkValue,
-  unsuitableUseReason,
   type Assessment,
   type CheckValue,
   type Criterion,
@@ -41,6 +40,7 @@ import {
 } from "@/lib/registry";
 
 import { calculate, economicsFields, type Economics, type EconomicsField, type EconomicsResult } from "@/lib/economics";
+import { classifyUse, vriClassifier, vriVerdicts, type VriOverrides, type VriVerdict } from "@/lib/vri";
 import { extractCadastralNumbers, isAgriculturalLand, normalizeCadastralNumber, parseNspdCard } from "@/lib/nspd";
 
 type Data = { sources: Source[]; plots: Plot[]; settings: Settings };
@@ -240,16 +240,18 @@ const checkColors: Record<CheckValue, string> = {
 
 function AssessmentEditor({
   form,
-  weights,
+  settings,
   onChecks,
   onScores,
 }: {
   form: PlotInput;
-  weights: Weights;
+  settings: Settings;
   onChecks: (checks: PlotInput["checks"]) => void;
   onScores: (scores: PlotInput["scores"]) => void;
 }) {
-  const assessment = assess(form, weights);
+  const { weights, vri } = settings;
+  const assessment = assess(form, weights, vri);
+  const use = classifyUse(form.permittedUse, vri);
   return (
     <div className="flex flex-col gap-4 rounded-xl border border-zinc-200 p-3 sm:col-span-2 dark:border-zinc-800">
       <div className="flex items-center justify-between">
@@ -261,18 +263,14 @@ function AssessmentEditor({
         <p className="mb-1 text-xs text-zinc-500">Шаг 1. Стоп-факторы — любое «нет» исключает участок</p>
         <ul className="flex flex-col gap-1">
           {(Object.keys(stopFactors) as StopFactor[]).map((key) => {
-            const value = checkValue(form, key);
-            // Неподходящий ВРИ выставляет «нет» сам, вручную не поменять — сначала нужно изменить ВРИ
-            const auto = value !== form.checks[key];
+            const value = checkValue(form, key, vri);
+            // ВРИ «не подходит» по классификатору выставляет «нет» сам, вручную не поменять — сначала нужно изменить ВРИ
+            const auto = key === "permittedUse" && use?.verdict === "no";
             return (
             <li key={key} className="flex items-center justify-between gap-2 text-sm">
               <span>
                 {stopFactors[key]}
-                {auto && (
-                  <span className="block text-xs text-rose-600">
-                    {unsuitableUseReason(form.permittedUse)} — участок исключается автоматически
-                  </span>
-                )}
+                {key === "permittedUse" && form.permittedUse.trim() && <VriHint permittedUse={form.permittedUse} vri={vri} />}
               </span>
               <select
                 value={value}
@@ -698,6 +696,83 @@ function EconomicsSummary({ result, areaHa }: { result: EconomicsResult; areaHa:
   );
 }
 
+const verdictColors: Record<VriVerdict, string> = {
+  ok: "text-emerald-700 dark:text-emerald-400",
+  no: "text-rose-600",
+  check: "text-amber-700 dark:text-amber-400",
+};
+
+// Что классификатор ВРИ говорит о виде использования участка
+function VriHint({ permittedUse, vri }: { permittedUse: string; vri: VriOverrides }) {
+  const use = classifyUse(permittedUse, vri);
+  if (!use) return <span className="block text-xs text-zinc-500">вид не найден в классификаторе — оцените вручную</span>;
+  return (
+    <span className={`block text-xs ${verdictColors[use.verdict]}`}>
+      {use.entry.code} «{use.entry.name}»: {vriVerdicts[use.verdict]}
+      {use.verdict !== "ok" && use.entry.note ? ` — ${use.entry.note}` : ""}
+      {use.verdict === "no" ? ", участок исключается" : ""}
+    </span>
+  );
+}
+
+function VriForm({ vri, onClose, onSaved }: { vri: VriOverrides; onClose: () => void; onSaved: () => void }) {
+  const [form, setForm] = useState<Record<string, VriVerdict>>(() =>
+    Object.fromEntries(vriClassifier.map((e) => [e.code, vri[e.code] ?? e.verdict])),
+  );
+  // По порядку кодов классификатора: 1.0, 1.1 … 1.20, затем 2.2, 7.1 …
+  const entries = [...vriClassifier].sort((a, b) => a.code.localeCompare(b.code, "ru", { numeric: true }));
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    await api("/api/settings", "PATCH", { vri: form });
+    onSaved();
+  }
+
+  return (
+    <Modal title="Виды разрешённого использования" onClose={onClose}>
+      <form onSubmit={submit} className="flex flex-col gap-3">
+        <p className="text-sm text-zinc-500">
+          Классификатор ВРИ (приказ Росреестра № П/0412). ВРИ участка сопоставляется с ним по коду или формулировке: «не
+          подходит» исключает участок, «подходит» ставит стоп-фактору «да», «проверить» оставляет решение вам.
+        </p>
+        <ul className="flex flex-col divide-y divide-zinc-200 dark:divide-zinc-800">
+          {entries.map((e) => (
+            <li key={e.code} className="flex items-center gap-3 py-1.5 text-sm">
+              <span className="w-12 shrink-0 text-xs text-zinc-500">{e.code}</span>
+              <span className="flex-1">
+                {e.name}
+                {e.note && <span className="block text-xs text-zinc-500">{e.note}</span>}
+              </span>
+              <select
+                value={form[e.code]}
+                onChange={(ev) => setForm((f) => ({ ...f, [e.code]: ev.target.value as VriVerdict }))}
+                className={`shrink-0 rounded-lg border border-zinc-200 bg-white px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-900 ${verdictColors[form[e.code]]}`}
+                aria-label={e.name}
+              >
+                {(Object.keys(vriVerdicts) as VriVerdict[]).map((v) => (
+                  <option key={v} value={v}>{vriVerdicts[v]}{v === e.verdict ? " (по умолчанию)" : ""}</option>
+                ))}
+              </select>
+            </li>
+          ))}
+        </ul>
+        <div className="flex items-center gap-2">
+          <button type="submit" className="rounded-lg bg-zinc-900 px-4 py-2 text-sm text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900">
+            Сохранить
+          </button>
+          <button
+            type="button"
+            onClick={() => setForm(Object.fromEntries(vriClassifier.map((e) => [e.code, e.verdict])))}
+            className="rounded-lg px-4 py-2 text-sm text-zinc-500 hover:text-zinc-800"
+          >
+            Вернуть исходные
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
 function WeightsForm({ weights, onClose, onSaved }: { weights: Weights; onClose: () => void; onSaved: () => void }) {
   const [form, setForm] = useState<Weights>(weights);
   const total = (Object.keys(criteria) as Criterion[]).reduce((sum, k) => sum + (form[k] || 0), 0);
@@ -995,13 +1070,13 @@ function ImportForm({ plots, onClose, onSaved }: { plots: Plot[]; onClose: () =>
 function PlotForm({
   plot,
   sources,
-  weights,
+  settings,
   onClose,
   onSaved,
 }: {
   plot: Plot | null;
   sources: Source[];
-  weights: Weights;
+  settings: Settings;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -1091,9 +1166,7 @@ function PlotForm({
         </Field>
         <Field label="Вид разрешённого использования">
           <input value={form.permittedUse} onChange={(e) => set("permittedUse", e.target.value)} className={inputClass} />
-          {unsuitableUseReason(form.permittedUse) && (
-            <span className="text-rose-600">{unsuitableUseReason(form.permittedUse)}, участок будет исключён</span>
-          )}
+          {form.permittedUse.trim() && <VriHint permittedUse={form.permittedUse} vri={settings.vri} />}
         </Field>
         <Field label="Источник" wide>
           <select value={form.sourceId} onChange={(e) => set("sourceId", e.target.value)} className={inputClass}>
@@ -1111,7 +1184,7 @@ function PlotForm({
         </Field>
         <AssessmentEditor
           form={form}
-          weights={weights}
+          settings={settings}
           onChecks={(checks) => set("checks", checks)}
           onScores={(scores) => set("scores", scores)}
         />
@@ -1280,8 +1353,8 @@ function PlotsView({ data, onEdit }: { data: Data; onEdit: (plot: Plot | null) =
   }, [data.plots]);
 
   const assessments = useMemo(
-    () => new Map(data.plots.map((p) => [p.id, assess(p, data.settings.weights)])),
-    [data.plots, data.settings.weights],
+    () => new Map(data.plots.map((p) => [p.id, assess(p, data.settings.weights, data.settings.vri)])),
+    [data.plots, data.settings.weights, data.settings.vri],
   );
   // Для сортировки: оценённые по баллу, затем недооценённые, исключённые в конце
   const rank = (a: Assessment) => (a.kind === "scored" ? a.score : a.kind === "incomplete" ? -1 : -2);
@@ -1477,6 +1550,7 @@ type Editing =
   | { kind: "plot"; item: Plot | null }
   | { kind: "source"; item: Source | null }
   | { kind: "weights" }
+  | { kind: "vri" }
   | { kind: "import" }
   | null;
 
@@ -1516,30 +1590,38 @@ export default function Registry() {
           <h1 className="text-2xl font-semibold">Земля в аренду</h1>
           <p className="text-sm text-zinc-500">Реестр земельных возможностей · пилот: Псковская область</p>
         </div>
-        {tab === "plots" && data && (
-          <>
+        <div className="ml-auto flex flex-wrap justify-end gap-2">
+          {tab === "plots" && data && (
+            <>
+              <button
+                onClick={() => setEditing({ kind: "weights" })}
+                className="rounded-lg border border-zinc-300 px-4 py-2 text-sm hover:border-zinc-500 dark:border-zinc-700"
+              >
+                Веса оценки
+              </button>
+              <button
+                onClick={() => setEditing({ kind: "vri" })}
+                className="rounded-lg border border-zinc-300 px-4 py-2 text-sm hover:border-zinc-500 dark:border-zinc-700"
+              >
+                ВРИ
+              </button>
+              <button
+                onClick={() => setEditing({ kind: "import" })}
+                className="rounded-lg border border-zinc-300 px-4 py-2 text-sm hover:border-zinc-500 dark:border-zinc-700"
+              >
+                Импорт из НСПД
+              </button>
+            </>
+          )}
+          {tab !== "deadlines" && (
             <button
-              onClick={() => setEditing({ kind: "weights" })}
-              className="ml-auto rounded-lg border border-zinc-300 px-4 py-2 text-sm hover:border-zinc-500 dark:border-zinc-700"
+              onClick={() => setEditing(tab === "plots" ? { kind: "plot", item: null } : { kind: "source", item: null })}
+              className="rounded-lg bg-zinc-900 px-4 py-2 text-sm text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900"
             >
-              Веса оценки
+              {tab === "plots" ? "+ Участок" : "+ Источник"}
             </button>
-            <button
-              onClick={() => setEditing({ kind: "import" })}
-              className="rounded-lg border border-zinc-300 px-4 py-2 text-sm hover:border-zinc-500 dark:border-zinc-700"
-            >
-              Импорт из НСПД
-            </button>
-          </>
-        )}
-        {tab !== "deadlines" && (
-          <button
-            onClick={() => setEditing(tab === "plots" ? { kind: "plot", item: null } : { kind: "source", item: null })}
-            className={`${tab === "plots" && data ? "" : "ml-auto"} rounded-lg bg-zinc-900 px-4 py-2 text-sm text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900`}
-          >
-            {tab === "plots" ? "+ Участок" : "+ Источник"}
-          </button>
-        )}
+          )}
+        </div>
       </header>
 
       <nav className="mb-4 flex gap-1 border-b border-zinc-200 dark:border-zinc-800">
@@ -1575,11 +1657,12 @@ export default function Registry() {
         <PlotForm
           plot={editing.item}
           sources={data.sources}
-          weights={data.settings.weights}
+          settings={data.settings}
           onClose={() => setEditing(null)}
           onSaved={saved}
         />
       )}
+      {data && editing?.kind === "vri" && <VriForm vri={data.settings.vri} onClose={() => setEditing(null)} onSaved={saved} />}
       {data && editing?.kind === "weights" && (
         <WeightsForm weights={data.settings.weights} onClose={() => setEditing(null)} onSaved={saved} />
       )}

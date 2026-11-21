@@ -31,6 +31,7 @@ import {
 } from "./registry";
 import { economicsFields, emptyEconomics, type Economics, type EconomicsField } from "./economics";
 import { normalizeCadastralNumber } from "./nspd";
+import { vriClassifier, vriVerdicts, type VriVerdict } from "./vri";
 
 type Data = { sources: Source[]; plots: Plot[]; settings: Settings };
 
@@ -53,7 +54,7 @@ function normalize(data: Partial<Data>): Data {
       deadlines: p.deadlines ?? [],
       obligations: p.obligations ?? [],
     })),
-    settings: { weights: { ...defaultWeights, ...data.settings?.weights } },
+    settings: { weights: { ...defaultWeights, ...data.settings?.weights }, vri: data.settings?.vri ?? {} },
   };
 }
 
@@ -321,6 +322,19 @@ export function updateWeights(input: Partial<Weights>) {
     for (const key of Object.keys(criteria) as Criterion[]) {
       const value = Number(input[key]);
       if (Number.isFinite(value) && value >= 0) data.settings.weights[key] = Math.round(value);
+    }
+    return data.settings;
+  });
+}
+
+// Своя оценка вида ВРИ вместо оценки по умолчанию; значение по умолчанию — убрать переопределение
+export function updateVri(input: Record<string, unknown>) {
+  return mutate((data) => {
+    for (const [code, verdict] of Object.entries(input)) {
+      const entry = vriClassifier.find((e) => e.code === code);
+      if (!entry || !(typeof verdict === "string" && verdict in vriVerdicts)) continue;
+      if (verdict === entry.verdict) delete data.settings.vri[code];
+      else data.settings.vri[code] = verdict as VriVerdict;
     }
     return data.settings;
   });

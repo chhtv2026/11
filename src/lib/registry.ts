@@ -1,5 +1,6 @@
 // Типы и справочники реестра. Файл без серверных импортов — его использует и интерфейс.
 import { emptyEconomics, type Economics } from "./economics";
+import { classifyUse, type VriOverrides } from "./vri";
 
 export const sourceTypes = {
   fund: "Фонд перераспределения земель",
@@ -47,7 +48,7 @@ export const stopFactors = {
   route: "Есть законный способ получить участок именно вам",
   restrictions: "Нет ограничений, запрещающих сельхозиспользование (ООПТ, ЗОУИТ и т. п.)",
   access: "Есть физический подъезд к участку",
-  permittedUse: "ВРИ подходит под стратегию (не ЛПХ, не дороги и не земли общего пользования)",
+  permittedUse: "ВРИ подходит под стратегию (по классификатору ВРИ)",
 } as const;
 export type StopFactor = keyof typeof stopFactors;
 export type CheckValue = "unknown" | "yes" | "no";
@@ -66,28 +67,20 @@ export type Weights = Record<Criterion, number>;
 // Условные веса из концепции; подлежат проверке на реальных случаях
 export const defaultWeights: Weights = { legal: 30, economics: 25, usageCost: 20, liquidity: 15, potential: 10 };
 
-export type Settings = { weights: Weights };
+export type Settings = { weights: Weights; vri: VriOverrides };
 
 export function emptyChecks(): Record<StopFactor, CheckValue> {
   return { category: "unknown", rights: "unknown", route: "unknown", restrictions: "unknown", access: "unknown", permittedUse: "unknown" };
 }
 
-// ВРИ, которые под стратегию не подходят: ЛПХ на сельхозземле не даёт строить дом для КФХ,
-// дороги и земли общего пользования не предоставят для сельхозпроизводства
-const unsuitableUses = [
-  { pattern: /лпх|личн\S*\s+подсобн/i, reason: "ЛПХ — нет перспективы строительства для КФХ" },
-  { pattern: /дорог|улично|железнодорожн/i, reason: "дорога — не для сельхозпроизводства" },
-  { pattern: /общего\s+пользования/i, reason: "земли общего пользования — не для сельхозпроизводства" },
-];
-
-// Причина, по которой ВРИ не подходит, или null
-export function unsuitableUseReason(permittedUse: string) {
-  return unsuitableUses.find((u) => u.pattern.test(permittedUse))?.reason ?? null;
-}
-
-// Итоговое значение стоп-фактора: неподходящий ВРИ исключает участок, что бы ни стояло вручную
-export function checkValue(plot: Pick<Plot, "checks" | "permittedUse">, key: StopFactor): CheckValue {
-  if (key === "permittedUse" && unsuitableUseReason(plot.permittedUse)) return "no";
+// Итоговое значение стоп-фактора. ВРИ оценивается по классификатору: «не подходит» исключает участок,
+// что бы ни стояло вручную; «подходит» ставит «да», пока вручную ничего не выбрано.
+export function checkValue(plot: Pick<Plot, "checks" | "permittedUse">, key: StopFactor, vri: VriOverrides = {}): CheckValue {
+  if (key === "permittedUse") {
+    const use = classifyUse(plot.permittedUse, vri);
+    if (use?.verdict === "no") return "no";
+    if (use?.verdict === "ok" && plot.checks[key] === "unknown") return "yes";
+  }
   return plot.checks[key];
 }
 
@@ -96,15 +89,15 @@ export type Assessment =
   | { kind: "incomplete"; rated: number }
   | { kind: "scored"; score: number; checksDone: boolean };
 
-export function assess(plot: Pick<Plot, "checks" | "scores" | "permittedUse">, weights: Weights): Assessment {
-  const reasons = (Object.keys(stopFactors) as StopFactor[]).filter((k) => checkValue(plot, k) === "no");
+export function assess(plot: Pick<Plot, "checks" | "scores" | "permittedUse">, weights: Weights, vri: VriOverrides = {}): Assessment {
+  const reasons = (Object.keys(stopFactors) as StopFactor[]).filter((k) => checkValue(plot, k, vri) === "no");
   if (reasons.length) return { kind: "excluded", reasons };
   const keys = Object.keys(criteria) as Criterion[];
   const rated = keys.filter((k) => plot.scores[k]);
   if (rated.length < keys.length) return { kind: "incomplete", rated: rated.length };
   const total = keys.reduce((sum, k) => sum + weights[k], 0) || 1;
   const score = keys.reduce((sum, k) => sum + (weights[k] * plot.scores[k]!) / 5, 0) / total;
-  const checksDone = (Object.keys(stopFactors) as StopFactor[]).every((k) => checkValue(plot, k) === "yes");
+  const checksDone = (Object.keys(stopFactors) as StopFactor[]).every((k) => checkValue(plot, k, vri) === "yes");
   return { kind: "scored", score: Math.round(score * 100), checksDone };
 }
 
