@@ -25,7 +25,7 @@ import {
   sourceTypes,
   stopFactors,
   checkValue,
-  isPrivateFarmUse,
+  unsuitableUseReason,
   type Assessment,
   type CheckValue,
   type Criterion,
@@ -262,13 +262,17 @@ function AssessmentEditor({
         <ul className="flex flex-col gap-1">
           {(Object.keys(stopFactors) as StopFactor[]).map((key) => {
             const value = checkValue(form, key);
-            // ВРИ с ЛПХ выставляет «нет» сам, вручную не поменять — сначала нужно изменить ВРИ
+            // Неподходящий ВРИ выставляет «нет» сам, вручную не поменять — сначала нужно изменить ВРИ
             const auto = value !== form.checks[key];
             return (
             <li key={key} className="flex items-center justify-between gap-2 text-sm">
               <span>
                 {stopFactors[key]}
-                {auto && <span className="block text-xs text-rose-600">в ВРИ указано ЛПХ — участок исключается автоматически</span>}
+                {auto && (
+                  <span className="block text-xs text-rose-600">
+                    {unsuitableUseReason(form.permittedUse)} — участок исключается автоматически
+                  </span>
+                )}
               </span>
               <select
                 value={value}
@@ -912,7 +916,7 @@ function ImportForm({ plots, onClose, onSaved }: { plots: Plot[]; onClose: () =>
           </p>
           <p className="text-zinc-500">
             Дальше по каждому: откройте участок, нажмите «Вставить карточку из НСПД» — заполнятся категория, ВРИ,
-            собственник и площадь, а неподходящие (не сельхозземли, ЛПХ) сразу отсеются.
+            собственник и площадь, а неподходящие (не сельхозземли, ЛПХ, дороги) сразу отсеются.
           </p>
           <button
             onClick={onSaved}
@@ -1087,8 +1091,8 @@ function PlotForm({
         </Field>
         <Field label="Вид разрешённого использования">
           <input value={form.permittedUse} onChange={(e) => set("permittedUse", e.target.value)} className={inputClass} />
-          {isPrivateFarmUse(form.permittedUse) && (
-            <span className="text-rose-600">ЛПХ — нет перспективы строительства для КФХ, участок будет исключён</span>
+          {unsuitableUseReason(form.permittedUse) && (
+            <span className="text-rose-600">{unsuitableUseReason(form.permittedUse)}, участок будет исключён</span>
           )}
         </Field>
         <Field label="Источник" wide>

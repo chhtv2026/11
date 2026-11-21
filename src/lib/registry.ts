@@ -47,7 +47,7 @@ export const stopFactors = {
   route: "Есть законный способ получить участок именно вам",
   restrictions: "Нет ограничений, запрещающих сельхозиспользование (ООПТ, ЗОУИТ и т. п.)",
   access: "Есть физический подъезд к участку",
-  permittedUse: "ВРИ подходит под стратегию (не ЛПХ: нужна перспектива строительства для КФХ)",
+  permittedUse: "ВРИ подходит под стратегию (не ЛПХ, не дороги и не земли общего пользования)",
 } as const;
 export type StopFactor = keyof typeof stopFactors;
 export type CheckValue = "unknown" | "yes" | "no";
@@ -72,14 +72,22 @@ export function emptyChecks(): Record<StopFactor, CheckValue> {
   return { category: "unknown", rights: "unknown", route: "unknown", restrictions: "unknown", access: "unknown", permittedUse: "unknown" };
 }
 
-// ВРИ «для ведения ЛПХ» на землях сельхозназначения не даёт строить дом для КФХ — под стратегию не подходит
-export function isPrivateFarmUse(permittedUse: string) {
-  return /лпх|личн\S*\s+подсобн/i.test(permittedUse);
+// ВРИ, которые под стратегию не подходят: ЛПХ на сельхозземле не даёт строить дом для КФХ,
+// дороги и земли общего пользования не предоставят для сельхозпроизводства
+const unsuitableUses = [
+  { pattern: /лпх|личн\S*\s+подсобн/i, reason: "ЛПХ — нет перспективы строительства для КФХ" },
+  { pattern: /дорог|улично|железнодорожн/i, reason: "дорога — не для сельхозпроизводства" },
+  { pattern: /общего\s+пользования/i, reason: "земли общего пользования — не для сельхозпроизводства" },
+];
+
+// Причина, по которой ВРИ не подходит, или null
+export function unsuitableUseReason(permittedUse: string) {
+  return unsuitableUses.find((u) => u.pattern.test(permittedUse))?.reason ?? null;
 }
 
-// Итоговое значение стоп-фактора: ВРИ с ЛПХ исключает участок, что бы ни стояло вручную
+// Итоговое значение стоп-фактора: неподходящий ВРИ исключает участок, что бы ни стояло вручную
 export function checkValue(plot: Pick<Plot, "checks" | "permittedUse">, key: StopFactor): CheckValue {
-  if (key === "permittedUse" && isPrivateFarmUse(plot.permittedUse)) return "no";
+  if (key === "permittedUse" && unsuitableUseReason(plot.permittedUse)) return "no";
   return plot.checks[key];
 }
 
