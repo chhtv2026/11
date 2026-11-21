@@ -120,6 +120,29 @@ function Field({ label, children, wide }: { label: string; children: React.React
   );
 }
 
+// Подтверждение внутри страницы: системное окно confirm() во встроенном браузере не показывается
+function ConfirmButton({ label, question, onConfirm }: { label: string; question: string; onConfirm: () => void }) {
+  const [asking, setAsking] = useState(false);
+  if (!asking) {
+    return (
+      <button type="button" onClick={() => setAsking(true)} className="text-sm text-rose-600 hover:underline">
+        {label}
+      </button>
+    );
+  }
+  return (
+    <span className="flex items-center gap-2 text-sm">
+      <span className="text-rose-600">{question}</span>
+      <button type="button" onClick={onConfirm} className="rounded-lg bg-rose-600 px-3 py-1 text-white hover:bg-rose-700">
+        Да
+      </button>
+      <button type="button" onClick={() => setAsking(false)} className="rounded-lg px-3 py-1 text-zinc-500 hover:text-zinc-800">
+        Нет
+      </button>
+    </span>
+  );
+}
+
 function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -1008,8 +1031,11 @@ function ImportForm({ plots, onClose, onSaved }: { plots: Plot[]; onClose: () =>
               <a href={NSPD_MAP} target="_blank" rel="noreferrer" className="text-sky-700 hover:underline dark:text-sky-400">
                 НСПД
               </a>{" "}
-              — кнопка фильтра у строки поиска → «Поиск по атрибуту слоя» → «Земельные участки ЕГРН». Например: форма
-              собственности содержит «Муниципальная», адрес содержит «Новоржевский».
+              — кнопка фильтра у строки поиска → «Поиск по атрибуту слоя» → «Земельные участки ЕГРН». Три условия сразу:
+              <b> вид разрешенного использования</b> содержит «сельскохозяйствен», <b>адрес</b> содержит «Новоржевский»,
+              <b> форма собственности</b> содержит «Муниципальная» (или «субъекта»). Так дороги, кладбища и частные
+              участки в список не попадут. Другие подходящие ВРИ — отдельными поисками: «растениевод», «животновод»,
+              «крестьянск», «садоводство».
             </li>
             <li>Прокрутите список результатов до конца — в файл попадают только загруженные строки (по 40).</li>
             <li>«Скачать список объектов» и выберите скачанный файл ниже (можно прямо ZIP) или вставьте номера текстом.</li>
@@ -1099,14 +1125,47 @@ function PlotForm({
   }
 
   async function remove() {
-    if (!plot || !confirm("Удалить участок из реестра?")) return;
-    await api(`/api/plots/${plot.id}`, "DELETE");
-    onSaved();
+    if (!plot) return;
+    try {
+      await api(`/api/plots/${plot.id}`, "DELETE");
+      onSaved();
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  // Отклонить — сохранить со статусом «Отклонён»: участок остаётся в реестре и повторно не импортируется
+  async function reject() {
+    if (!plot) return;
+    try {
+      await api(`/api/plots/${plot.id}`, "PATCH", { ...form, status: "rejected" });
+      onSaved();
+    } catch (err) {
+      setError((err as Error).message);
+    }
   }
 
   return (
     <Modal title={plot ? "Участок" : "Новый участок"} onClose={onClose}>
       <form onSubmit={submit} className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        {plot && (
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 sm:col-span-2">
+            {form.status !== "rejected" && (
+              <button
+                type="button"
+                onClick={reject}
+                className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm hover:border-zinc-500 dark:border-zinc-700"
+                title="Участок останется в реестре со статусом «Отклонён» и не добавится повторно при импорте"
+              >
+                Не подходит — отклонить
+              </button>
+            )}
+            <ConfirmButton label="Удалить участок" question="Удалить совсем?" onConfirm={remove} />
+            <span className="text-xs text-zinc-500">
+              Отклонённый остаётся в реестре и не вернётся при импорте; удалённый может добавиться снова.
+            </span>
+          </div>
+        )}
         <NspdPaste form={form} onApply={(patch) => setForm((f) => ({ ...f, ...patch }))} />
         <Field label="Кадастровый номер">
           <input value={form.cadastralNumber} onChange={(e) => set("cadastralNumber", e.target.value)} placeholder="60:00:0000000:000" className={inputClass} />
@@ -1207,9 +1266,9 @@ function PlotForm({
             Отмена
           </button>
           {plot && (
-            <button type="button" onClick={remove} className="ml-auto text-sm text-rose-600 hover:underline">
-              Удалить участок
-            </button>
+            <span className="ml-auto">
+              <ConfirmButton label="Удалить участок" question="Удалить совсем?" onConfirm={remove} />
+            </span>
           )}
         </div>
       </form>
@@ -1237,9 +1296,13 @@ function SourceForm({ source, onClose, onSaved }: { source: Source | null; onClo
   }
 
   async function remove() {
-    if (!source || !confirm("Удалить источник? Участки останутся, но без ссылки на него.")) return;
-    await api(`/api/sources/${source.id}`, "DELETE");
-    onSaved();
+    if (!source) return;
+    try {
+      await api(`/api/sources/${source.id}`, "DELETE");
+      onSaved();
+    } catch (err) {
+      setError((err as Error).message);
+    }
   }
 
   return (
@@ -1273,9 +1336,9 @@ function SourceForm({ source, onClose, onSaved }: { source: Source | null; onClo
             Отмена
           </button>
           {source && (
-            <button type="button" onClick={remove} className="ml-auto text-sm text-rose-600 hover:underline">
-              Удалить источник
-            </button>
+            <span className="ml-auto">
+              <ConfirmButton label="Удалить источник" question="Участки останутся без ссылки на него. Удалить?" onConfirm={remove} />
+            </span>
           )}
         </div>
       </form>
