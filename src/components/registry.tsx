@@ -24,6 +24,7 @@ import {
   plotStatuses,
   sourceTypes,
   stopFactors,
+  workingStatuses,
   checkValue,
   type Assessment,
   type CheckValue,
@@ -1037,7 +1038,12 @@ function ImportForm({ plots, onClose, onSaved }: { plots: Plot[]; onClose: () =>
               участки в список не попадут. Другие подходящие ВРИ — отдельными поисками: «растениевод», «животновод»,
               «крестьянск», «садоводство».
             </li>
-            <li>Прокрутите список результатов до конца — в файл попадают только загруженные строки (по 40).</li>
+            <li>
+              НСПД показывает не больше 40 участков за один поиск («Поиск прекращён… Уточните параметры»). Делите поиск
+              на части: добавьте условие <b>«Площадь, кв.м»</b> — «Больше или равно» / «Меньше» (например, 20 000–80 000,
+              80 000–300 000, от 300 000 кв. м; мельче 2 га всё равно не подходит) или сузьте <b>адрес</b> до волости.
+              Каждую часть скачивайте и импортируйте — повторы пропустятся.
+            </li>
             <li>«Скачать список объектов» и выберите скачанный файл ниже (можно прямо ZIP) или вставьте номера текстом.</li>
           </ol>
           <input
@@ -1276,7 +1282,19 @@ function PlotForm({
   );
 }
 
-function SourceForm({ source, onClose, onSaved }: { source: Source | null; onClose: () => void; onSaved: () => void }) {
+function SourceForm({
+  source,
+  plots,
+  onClose,
+  onSaved,
+}: {
+  source: Source | null;
+  plots: Plot[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const own = source ? plots.filter((p) => p.sourceId === source.id) : [];
+  const kept = own.filter((p) => workingStatuses.includes(p.status)).length;
   const [form, setForm] = useState<SourceInput>(() => (source ? { ...source } : emptySource()));
   const [error, setError] = useState("");
   const set = <K extends keyof SourceInput>(key: K, value: SourceInput[K]) => setForm((f) => ({ ...f, [key]: value }));
@@ -1295,10 +1313,10 @@ function SourceForm({ source, onClose, onSaved }: { source: Source | null; onClo
     }
   }
 
-  async function remove() {
+  async function remove(withPlots = false) {
     if (!source) return;
     try {
-      await api(`/api/sources/${source.id}`, "DELETE");
+      await api(`/api/sources/${source.id}${withPlots ? "?withPlots=1" : ""}`, "DELETE");
       onSaved();
     } catch (err) {
       setError((err as Error).message);
@@ -1337,10 +1355,23 @@ function SourceForm({ source, onClose, onSaved }: { source: Source | null; onClo
           </button>
           {source && (
             <span className="ml-auto">
-              <ConfirmButton label="Удалить источник" question="Участки останутся без ссылки на него. Удалить?" onConfirm={remove} />
+              <ConfirmButton label="Удалить источник" question="Участки останутся без ссылки на него. Удалить?" onConfirm={() => remove()} />
             </span>
           )}
         </div>
+        {own.length - kept > 0 && (
+          <div className="flex flex-col gap-1 rounded-xl border border-rose-200 p-3 text-sm sm:col-span-2 dark:border-rose-900">
+            <ConfirmButton
+              label={`Удалить источник вместе с его участками (${own.length - kept})`}
+              question={`Удалить ${own.length - kept} участк. безвозвратно?`}
+              onConfirm={() => remove(true)}
+            />
+            <span className="text-xs text-zinc-500">
+              Для неудачной выгрузки: очистит список, после чего можно импортировать заново с другими фильтрами.
+              {kept > 0 && ` Участки, с которыми уже идёт работа (${kept}: на проверке, перспективные и дальше), останутся.`}
+            </span>
+          </div>
+        )}
       </form>
     </Modal>
   );
@@ -1732,7 +1763,7 @@ export default function Registry() {
       {data && editing?.kind === "import" && (
         <ImportForm plots={data.plots} onClose={() => setEditing(null)} onSaved={saved} />
       )}
-      {editing?.kind === "source" && <SourceForm source={editing.item} onClose={() => setEditing(null)} onSaved={saved} />}
+      {data && editing?.kind === "source" && <SourceForm source={editing.item} plots={data.plots} onClose={() => setEditing(null)} onSaved={saved} />}
     </div>
   );
 }

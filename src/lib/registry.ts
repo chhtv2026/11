@@ -191,6 +191,9 @@ export type YearSummary = {
   warnings: string[];
 };
 
+// Статусы участков, с которыми уже идёт работа: при чистке списка их не удаляем
+export const workingStatuses: PlotStatus[] = ["checking", "promising", "applying", "leased", "bought"];
+
 // Статусы, при которых земля уже на руках и её обязаны использовать
 export const holdingStatuses: PlotStatus[] = ["leased", "bought"];
 

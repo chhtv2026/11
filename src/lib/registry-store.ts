@@ -10,6 +10,7 @@ import {
   emptyRoute,
   obligationKinds,
   owners,
+  workingStatuses,
   type Owner,
   routeSteps,
   type Deadline,
@@ -120,11 +121,13 @@ export function updateSource(id: string, input: Partial<SourceInput>) {
   });
 }
 
-export function deleteSource(id: string) {
+// withPlots — удалить и участки этого источника (например, неудачную выгрузку из НСПД),
+// кроме тех, с которыми уже идёт работа: они остаются, просто теряют ссылку на источник
+export function deleteSource(id: string, withPlots = false) {
   return mutate((data) => {
     const before = data.sources.length;
     data.sources = data.sources.filter((s) => s.id !== id);
-    // Участки остаются, просто теряют ссылку на источник
+    if (withPlots) data.plots = data.plots.filter((p) => p.sourceId !== id || workingStatuses.includes(p.status));
     for (const plot of data.plots) if (plot.sourceId === id) plot.sourceId = "";
     return data.sources.length < before;
   });
