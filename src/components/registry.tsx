@@ -913,6 +913,13 @@ function NspdPaste({ form, onApply }: { form: PlotInput; onApply: (patch: Partia
       filled.push("собственник");
     }
     const notes: string[] = [];
+    // По 10.1 предоставляют только государственную и муниципальную землю: частный участок сразу исключаем
+    if (card.owner === "private") {
+      patch.checks = { ...(patch.checks ?? form.checks), route: "no" };
+      if (!form.notes.includes("частная собственность")) {
+        notes.push("Форма собственности — частная собственность: по ст. 10.1 такой участок не предоставляют, участок исключён (стоп-фактор «законный способ»).");
+      }
+    }
     if (card.address && !form.notes.includes(card.address)) notes.push(`Адрес по НСПД: ${card.address}`);
     if (card.parts.length && !form.notes.includes(card.parts[0])) {
       notes.push(`В НСПД есть части участка (${card.parts.join(", ")}) — часто это обременения или зоны, проверить по выписке ЕГРН.`);
