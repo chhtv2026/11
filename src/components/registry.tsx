@@ -17,6 +17,7 @@ import {
   type RouteStep,
   criteria,
   defaultWeights,
+  defaultRegion,
   emptyPlot,
   emptySource,
   owners,
@@ -42,6 +43,7 @@ import {
 
 import { calculate, economicsFields, type Economics, type EconomicsField, type EconomicsResult } from "@/lib/economics";
 import { classifyUse, vriClassifier, vriVerdicts, type VriOverrides, type VriVerdict } from "@/lib/vri";
+import { regionByCadastralNumber } from "@/lib/regions";
 import { extractCadastralNumbers, isAgriculturalLand, normalizeCadastralNumber, parseNspdCard } from "@/lib/nspd";
 
 type Data = { sources: Source[]; plots: Plot[]; settings: Settings };
@@ -863,6 +865,11 @@ function NspdPaste({ form, onApply }: { form: PlotInput; onApply: (patch: Partia
       patch.cadastralNumber = card.cadastralNumber;
       filled.push("кадастровый номер");
     }
+    const region = regionByCadastralNumber(card.cadastralNumber ?? current);
+    if (region && region !== form.region) {
+      patch.region = region;
+      filled.push("регион");
+    }
     if (card.district && !form.district.trim()) {
       patch.district = card.district;
       filled.push("район");
@@ -1175,7 +1182,21 @@ function PlotForm({
         )}
         <NspdPaste form={form} onApply={(patch) => setForm((f) => ({ ...f, ...patch }))} />
         <Field label="Кадастровый номер">
-          <input value={form.cadastralNumber} onChange={(e) => set("cadastralNumber", e.target.value)} placeholder="60:00:0000000:000" className={inputClass} />
+          <input
+            value={form.cadastralNumber}
+            onChange={(e) => {
+              const value = e.target.value;
+              const region = regionByCadastralNumber(value);
+              // Регион подставляем по номеру, пока его не меняли вручную
+              setForm((f) => ({
+                ...f,
+                cadastralNumber: value,
+                ...(region && (!f.region.trim() || f.region === regionByCadastralNumber(f.cadastralNumber) || f.region === defaultRegion) && { region }),
+              }));
+            }}
+            placeholder="60:00:0000000:000"
+            className={inputClass}
+          />
         </Field>
         <Field label="Название (если нет номера)">
           <input value={form.title} onChange={(e) => set("title", e.target.value)} placeholder="Поле у д. ..." className={inputClass} />

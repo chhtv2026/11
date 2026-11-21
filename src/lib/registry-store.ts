@@ -32,6 +32,7 @@ import {
 } from "./registry";
 import { economicsFields, emptyEconomics, type Economics, type EconomicsField } from "./economics";
 import { normalizeCadastralNumber } from "./nspd";
+import { regionByCadastralNumber } from "./regions";
 import { vriClassifier, vriVerdicts, type VriVerdict } from "./vri";
 
 type Data = { sources: Source[]; plots: Plot[]; settings: Settings };
@@ -305,6 +306,7 @@ export function importPlots(input: { numbers?: unknown; sourceName?: unknown; ow
       data.plots.push({
         ...emptyPlot(),
         cadastralNumber: number,
+        region: regionByCadastralNumber(number) ?? emptyPlot().region,
         district: districts.get(number.slice(0, 5)) ?? "",
         owner,
         sourceId: source.id,
