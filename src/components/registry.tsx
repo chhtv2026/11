@@ -45,7 +45,7 @@ import {
 
 import { calculate, economicsFields, type Economics, type EconomicsField, type EconomicsResult } from "@/lib/economics";
 import { classifyUse, vriClassifier, vriVerdicts, type VriOverrides, type VriVerdict } from "@/lib/vri";
-import { regionByCadastralNumber } from "@/lib/regions";
+import { districtByCadastralNumber, regionByCadastralNumber } from "@/lib/regions";
 import { extractCadastralNumbers, isAgriculturalLand, normalizeCadastralNumber, parseNspdCard } from "@/lib/nspd";
 import { ROSREESTR_ONLINE, ownershipClaimDeadline, parseRosreestrCard } from "@/lib/rosreestr";
 import { TORGI_LOTS, parseTorgiExport, torgiExcludes, torgiOutcomes as lotOutcomes, type TorgiExport, type TorgiOutcome } from "@/lib/torgi";
@@ -1269,7 +1269,9 @@ function ImportForm({ plots, onClose, onSaved }: { plots: Plot[]; onClose: () =>
   const [sourceName, setSourceName] = useState(() => `НСПД, выгрузка от ${formatDay(today())}`);
   const [owner, setOwner] = useState<keyof typeof owners>("unknown");
   const [error, setError] = useState("");
-  const [result, setResult] = useState<{ created: number; skipped: string[]; updated: number } | null>(null);
+  const [result, setResult] = useState<{ created: number; skipped: string[]; updated: number; absentMarked: number } | null>(null);
+  // Выгрузка со всеми торгами по сельхозземле (без фильтров ВРИ и статуса): отсутствие участка в ней — значит, торгов не было
+  const [complete, setComplete] = useState(false);
   // Выгрузка реестра лотов torgi.gov.ru: номера вместе со сведениями о последнем лоте
   const [torgi, setTorgi] = useState<TorgiExport | null>(null);
 
@@ -1295,6 +1297,15 @@ function ImportForm({ plots, onClose, onSaved }: { plots: Plot[]; onClose: () =>
     }
   }
 
+  const canMarkAbsent = Boolean(torgi?.allStatuses && torgi.lots < 500);
+  const torgiNumbers = new Set(torgi?.items.map((i) => i.cadastralNumber));
+  const absentPlots = canMarkAbsent
+    ? plots.filter((p) => {
+        const n = normalizeCadastralNumber(p.cadastralNumber);
+        return torgi!.districtCodes.includes(n.slice(0, 5)) && !torgiNumbers.has(n) && !p.torgiCheckedAt && p.checks.rights !== "no";
+      })
+    : [];
+
   async function submit() {
     try {
       // Отметку «торги проверены» ставим, только если выгрузка без фильтра статуса: иначе не видно повторных лотов
@@ -1309,6 +1320,7 @@ function ImportForm({ plots, onClose, onSaved }: { plots: Plot[]; onClose: () =>
             sourceName,
             sourceType: "auction",
             owner,
+            ...(complete && canMarkAbsent ? { absentDistrictCodes: torgi.districtCodes, absentCheckedAt: day } : {}),
           }
         : { numbers: fresh, sourceName, owner };
       setResult(await api("/api/plots/import", "POST", body));
@@ -1323,7 +1335,8 @@ function ImportForm({ plots, onClose, onSaved }: { plots: Plot[]; onClose: () =>
         <div className="flex flex-col gap-3 text-sm">
           <p>
             Добавлено участков: <b>{result.created}</b>. Источник — «{sourceName}», статус «Найден».
-            {result.updated > 0 && <> Уже известным участкам дописаны сведения о торгах: {result.updated}.</>}
+            {result.updated > 0 && <> Уже известным участкам обновлены сведения о торгах: {result.updated}.</>}
+            {result.absentMarked > 0 && <> Участкам без лотов в выгрузке отмечено «✓ торги»: {result.absentMarked}.</>}
           </p>
           <p className="text-zinc-500">
             Дальше по каждому: откройте участок, нажмите «Вставить карточку из НСПД» — заполнятся категория, ВРИ,
@@ -1414,6 +1427,24 @@ function ImportForm({ plots, onClose, onSaved }: { plots: Plot[]; onClose: () =>
                 <p className="text-amber-700 dark:text-amber-400">
                   В выгрузке ровно {torgi.lots} лотов — похоже, это предел сайта, и более старые торги не попали. Сузьте поиск
                   по дате или району и выгрузите остальное отдельно.
+                </p>
+              )}
+              {canMarkAbsent && absentPlots.length > 0 && (
+                <label className="flex items-start gap-2">
+                  <input type="checkbox" checked={complete} onChange={(e) => setComplete(e.target.checked)} className="mt-1" />
+                  <span>
+                    Это выгрузка всех торгов по сельхозземле — только регион и категория, <b>без фильтров ВРИ и статуса</b>.
+                    Отметить «✓ торги» участкам этих районов, которых в выгрузке нет: <b>{absentPlots.length}</b>.
+                    <span className="block text-xs text-zinc-500">
+                      Ставьте галочку, только если фильтров ВРИ не было: иначе лот с другой формулировкой ВРИ мог не попасть в
+                      выгрузку. Если делили выгрузку по датам — импортируйте все части. Районы в выгрузке: {torgi.districtCodes.map((c) => districtByCadastralNumber(`${c}:`) ?? c).join(", ")}.
+                    </span>
+                  </span>
+                </label>
+              )}
+              {torgi.allStatuses && torgi.lots >= 500 && (
+                <p className="text-xs text-zinc-500">
+                  Участки без лотов не отмечаются: выгрузка упёрлась в 500 лотов и может быть неполной.
                 </p>
               )}
               <button type="button" onClick={() => setTorgi(null)} className="self-start text-xs text-zinc-500 hover:text-zinc-800">

@@ -24,6 +24,8 @@ export type TorgiItem = {
   areaHa?: number;
   lots: number;
   outcome: TorgiOutcome;
+  // Начало приёма заявок последнего лота, ГГГГ-ММ-ДД
+  lotDate?: string;
   note: string;
 };
 
@@ -38,6 +40,8 @@ export type TorgiExport = {
   // В выгрузке есть не только «Не состоялся» — значит, её делали без фильтра статуса и по ней видно,
   // не выставили ли участок снова. Только тогда ставим отметку «торги проверены».
   allStatuses: boolean;
+  // Кадастровые районы (60:19 и т. п.), лоты которых есть в выгрузке, — включая частные
+  districtCodes: string[];
 };
 
 function outcomeOf(status: string, finalPrice: string): TorgiOutcome {
@@ -95,7 +99,8 @@ export function parseTorgiExport(sharedXml: string, sheetXml: string): TorgiExpo
   const get = (r: Row, name: string) => (r[col[name]] ?? "").trim();
 
   const outcomes = Object.fromEntries(Object.keys(torgiOutcomes).map((k) => [k, 0])) as Record<TorgiOutcome, number>;
-  const result: TorgiExport = { lots: 0, items: [], privateLots: 0, privateNumbers: 0, noNumber: 0, outcomes, allStatuses: false };
+  const result: TorgiExport = { lots: 0, items: [], privateLots: 0, privateNumbers: 0, noNumber: 0, outcomes, allStatuses: false, districtCodes: [] };
+  const codes = new Set<string>();
   const byNumber = new Map<string, Row[]>();
   const privateSet = new Set<string>();
   for (const r of rows.slice(headerAt + 1)) {
@@ -111,6 +116,7 @@ export function parseTorgiExport(sharedXml: string, sheetXml: string): TorgiExpo
       continue;
     }
     const number = normalizeCadastralNumber(found);
+    codes.add(number.slice(0, 5));
     // По 10.1 предоставляют только государственную и муниципальную землю
     if (/иная/i.test(get(r, "Форма собственности")) || /должник/i.test(get(r, "Вид торгов"))) {
       result.privateLots++;
@@ -120,6 +126,7 @@ export function parseTorgiExport(sharedXml: string, sheetXml: string): TorgiExpo
     byNumber.set(number, [...(byNumber.get(number) ?? []), r]);
   }
   result.privateNumbers = [...privateSet].filter((n) => !byNumber.has(n)).length;
+  result.districtCodes = [...codes].sort();
 
   for (const [number, lots] of byNumber) {
     // Решаем по самому свежему лоту: более ранние могли быть до повторного выставления
@@ -151,6 +158,7 @@ export function parseTorgiExport(sharedXml: string, sheetXml: string): TorgiExpo
       areaHa: area ? Math.round(Number(area)) / 10_000 : undefined,
       lots: lots.length,
       outcome,
+      lotDate: isoDate(get(last, "Дата и время начала подачи заявок")) || undefined,
       note: parts.join(" "),
     });
   }

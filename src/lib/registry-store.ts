@@ -55,6 +55,7 @@ function normalize(data: Partial<Data>): Data {
       district: p.district?.trim() ? p.district : (districtByCadastralNumber(p.cadastralNumber ?? "") ?? ""),
       rightsCheckedAt: p.rightsCheckedAt ?? null,
       torgiCheckedAt: p.torgiCheckedAt ?? null,
+      torgiLotDate: p.torgiLotDate ?? null,
       checks: { ...emptyChecks(), ...p.checks },
       scores: p.scores ?? {},
       economics: { ...emptyEconomics(), ...p.economics },
@@ -219,7 +220,7 @@ function cleanObligations(obligations: Partial<Obligation>[] | undefined): Oblig
 // Сложные поля проверяются отдельно; undefined — поле не прислали, оставляем как было
 function cleanPlotInput(input: Partial<PlotInput>) {
   const fields: Partial<PlotInput> = pick(emptyPlot(), input);
-  for (const key of ["nspdCheckedAt", "rightsCheckedAt", "torgiCheckedAt"] as const) {
+  for (const key of ["nspdCheckedAt", "rightsCheckedAt", "torgiCheckedAt", "torgiLotDate"] as const) {
     if (fields[key] !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(String(fields[key]))) fields[key] = null;
   }
   if (fields.cadastralValue !== undefined) {
@@ -310,11 +311,21 @@ export function updatePlot(id: string, input: Partial<PlotInput>) {
   });
 }
 
-export type ImportResult = { created: number; skipped: string[]; updated: number; sourceId: string };
+export type ImportResult = { created: number; skipped: string[]; updated: number; absentMarked: number; sourceId: string };
 
 // Участок из выгрузки торгов: номер плюс то, что о нём известно из лота
 // exclude — у участка есть претендент или идёт аукцион; torgiCheckedAt — по выгрузке видно, что торгов нет
-type ImportItem = { cadastralNumber: string; owner?: Owner; areaHa?: number; note?: string; exclude?: boolean; torgiCheckedAt?: string };
+type ImportItem = {
+  cadastralNumber: string;
+  owner?: Owner;
+  areaHa?: number;
+  note?: string;
+  exclude?: boolean;
+  torgiCheckedAt?: string;
+  lotDate?: string;
+};
+
+const isDay = (v: unknown): v is string => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v);
 
 function cleanImportItems(value: unknown): ImportItem[] {
   if (!Array.isArray(value)) return [];
@@ -331,7 +342,8 @@ function cleanImportItems(value: unknown): ImportItem[] {
         areaHa: Number.isFinite(area) && area > 0 ? area : undefined,
         note: typeof item.note === "string" ? item.note.slice(0, 2000) : undefined,
         exclude: item.exclude === true,
-        torgiCheckedAt: typeof item.torgiCheckedAt === "string" && /^\d{4}-\d{2}-\d{2}$/.test(item.torgiCheckedAt) ? item.torgiCheckedAt : undefined,
+        torgiCheckedAt: isDay(item.torgiCheckedAt) ? item.torgiCheckedAt : undefined,
+        lotDate: isDay(item.lotDate) ? item.lotDate : undefined,
       },
     ];
   });
@@ -345,6 +357,9 @@ export function importPlots(input: {
   sourceName?: unknown;
   sourceType?: unknown;
   owner?: unknown;
+  // Выгрузка torgi.gov.ru со всеми торгами по сельхозземле: участкам этих районов, которых в ней нет, ставим отметку
+  absentDistrictCodes?: unknown;
+  absentCheckedAt?: unknown;
 }): Promise<ImportResult> {
   return mutate((data) => {
     const now = new Date().toISOString();
@@ -393,6 +408,18 @@ export function importPlots(input: {
           plot.notes = [plot.notes.trim(), item.note].filter(Boolean).join("\n");
           changed = true;
         }
+        // Выгрузка старее уже учтённого лота — отметки не меняем, только заметку
+        if (item.lotDate && plot.torgiLotDate && item.lotDate < plot.torgiLotDate) {
+          if (changed) {
+            plot.updatedAt = now;
+            updated++;
+          }
+          continue;
+        }
+        if (item.lotDate && plot.torgiLotDate !== item.lotDate) {
+          plot.torgiLotDate = item.lotDate;
+          changed = true;
+        }
         // Свежий лот говорит, что участок занят, — исключаем и уже известный
         if (item.exclude && plot.checks.rights !== "no") {
           plot.checks = { ...plot.checks, rights: "no" };
@@ -418,6 +445,7 @@ export function importPlots(input: {
         // Единственная заявка на последних торгах — у участка есть арендатор, сразу в исключённые
         checks: item.exclude ? { ...emptyChecks(), rights: "no" } : emptyChecks(),
         torgiCheckedAt: item.exclude ? null : (item.torgiCheckedAt ?? null),
+        torgiLotDate: item.lotDate ?? null,
         sourceId: source.id,
         notes: [listNote, item.note].filter(Boolean).join("\n"),
         id: randomUUID(),
@@ -427,7 +455,24 @@ export function importPlots(input: {
       known.add(number);
       created++;
     }
-    return { created, skipped, updated, sourceId: source.id };
+    // Участки районов из выгрузки, которых в ней нет: по ним торгов не было (на дату выгрузки)
+    let absentMarked = 0;
+    const absentCodes = new Set(Array.isArray(input.absentDistrictCodes) ? input.absentDistrictCodes.map(String) : []);
+    if (absentCodes.size && isDay(input.absentCheckedAt)) {
+      const day = input.absentCheckedAt;
+      for (const plot of data.plots) {
+        const number = normalizeCadastralNumber(plot.cadastralNumber);
+        if (!absentCodes.has(number.slice(0, 5)) || items.has(number)) continue;
+        if (plot.torgiCheckedAt || plot.checks.rights === "no") continue;
+        plot.torgiCheckedAt = day;
+        plot.notes = [plot.notes.trim(), `torgi.gov.ru, выгрузка от ${day.split("-").reverse().join(".")}: лотов по участку нет.`]
+          .filter(Boolean)
+          .join("\n");
+        plot.updatedAt = now;
+        absentMarked++;
+      }
+    }
+    return { created, skipped, updated, absentMarked, sourceId: source.id };
   });
 }
 

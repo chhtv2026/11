@@ -293,6 +293,8 @@ export type Plot = {
   rightsCheckedAt: string | null;
   // Когда участок проверен на torgi.gov.ru (торги, извещения по ст. 39.18 ЗК) и ничего не нашлось
   torgiCheckedAt: string | null;
+  // Дата начала приёма заявок самого свежего известного лота: более старая выгрузка не перебивает новую
+  torgiLotDate: string | null;
   landCategory: string;
   permittedUse: string;
   owner: Owner;
@@ -331,6 +333,7 @@ export function emptyPlot(): PlotInput {
     nspdCheckedAt: null,
     rightsCheckedAt: null,
     torgiCheckedAt: null,
+    torgiLotDate: null,
     landCategory: "Земли сельскохозяйственного назначения",
     permittedUse: "",
     owner: "unknown",
