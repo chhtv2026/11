@@ -41,6 +41,7 @@ import {
 } from "@/lib/registry";
 
 import { calculate, economicsFields, type Economics, type EconomicsField, type EconomicsResult } from "@/lib/economics";
+import { extractCadastralNumbers, isAgriculturalLand, normalizeCadastralNumber, parseNspdCard } from "@/lib/nspd";
 
 type Data = { sources: Source[]; plots: Plot[]; settings: Settings };
 
@@ -737,6 +738,256 @@ function WeightsForm({ weights, onClose, onSaved }: { weights: Weights; onClose:
   );
 }
 
+const NSPD_MAP = "https://nspd.gov.ru/map?thematic=PKK";
+
+// Вставка скопированной карточки участка из НСПД: раскладывает сведения по полям формы
+function NspdPaste({ form, onApply }: { form: PlotInput; onApply: (patch: Partial<PlotInput>) => void }) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  function apply() {
+    const card = parseNspdCard(text);
+    const current = normalizeCadastralNumber(form.cadastralNumber);
+    if (card.cadastralNumber && current && card.cadastralNumber !== current) {
+      setMessage({ ok: false, text: `В карточке другой участок: ${card.cadastralNumber}. Ничего не изменено.` });
+      return;
+    }
+    const patch: Partial<PlotInput> = {};
+    const filled: string[] = [];
+    if (card.cadastralNumber && !current) {
+      patch.cadastralNumber = card.cadastralNumber;
+      filled.push("кадастровый номер");
+    }
+    if (card.district && !form.district.trim()) {
+      patch.district = card.district;
+      filled.push("район");
+    }
+    if (card.areaHa !== undefined) {
+      patch.areaHa = card.areaHa;
+      filled.push("площадь");
+    }
+    if (card.cadastralValue !== undefined) {
+      patch.cadastralValue = card.cadastralValue;
+      filled.push("кадастровая стоимость");
+    }
+    if (card.landCategory) {
+      patch.landCategory = card.landCategory;
+      // Категория — первый стоп-фактор: её НСПД показывает достоверно
+      patch.checks = { ...form.checks, category: isAgriculturalLand(card.landCategory) ? "yes" : "no" };
+      filled.push("категория (и стоп-фактор)");
+    }
+    if (card.permittedUse) {
+      patch.permittedUse = card.permittedUse;
+      filled.push("ВРИ");
+    }
+    if (card.owner) {
+      patch.owner = card.owner;
+      filled.push("собственник");
+    }
+    const notes: string[] = [];
+    if (card.address && !form.notes.includes(card.address)) notes.push(`Адрес по НСПД: ${card.address}`);
+    if (card.parts.length && !form.notes.includes(card.parts[0])) {
+      notes.push(`В НСПД есть части участка (${card.parts.join(", ")}) — часто это обременения или зоны, проверить по выписке ЕГРН.`);
+    }
+    if (notes.length) {
+      patch.notes = [form.notes.trim(), `НСПД, ${formatDay(today())}:`, ...notes].filter(Boolean).join("\n");
+      filled.push("заметки");
+    }
+    if (!filled.length) {
+      setMessage({
+        ok: false,
+        text: "Не нашёл в тексте полей карточки НСПД. Скопируйте карточку целиком, от «Вид объекта недвижимости» до «Кадастровая стоимость».",
+      });
+      return;
+    }
+    onApply(patch);
+    setText("");
+    setMessage({ ok: true, text: `Заполнено: ${filled.join(", ")}. Проверьте и сохраните участок.` });
+  }
+
+  async function copyNumber() {
+    await navigator.clipboard.writeText(form.cadastralNumber.trim());
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  }
+
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border border-dashed border-zinc-300 p-3 text-sm sm:col-span-2 dark:border-zinc-700">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <button type="button" onClick={() => setOpen((v) => !v)} className="font-medium hover:underline">
+          {open ? "▾" : "▸"} Вставить карточку из НСПД
+        </button>
+        {form.cadastralNumber.trim() && (
+          <button type="button" onClick={copyNumber} className="text-xs text-zinc-500 hover:text-zinc-800">
+            {copied ? "номер скопирован" : "скопировать номер"}
+          </button>
+        )}
+        <a href={NSPD_MAP} target="_blank" rel="noreferrer" className="text-xs text-sky-700 hover:underline dark:text-sky-400">
+          открыть НСПД ↗
+        </a>
+      </div>
+      {open && (
+        <>
+          <p className="text-xs text-zinc-500">
+            В НСПД найдите участок по номеру, откройте карточку, выделите её текст мышкой (от «Вид объекта недвижимости»
+            до «Кадастровая стоимость»), скопируйте и вставьте сюда. Аренду и обременения НСПД не показывает — их смотрят
+            в выписке ЕГРН.
+          </p>
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            rows={5}
+            className={inputClass}
+            placeholder={"Вид объекта недвижимости\nЗемельный участок\n…"}
+          />
+          <button
+            type="button"
+            onClick={apply}
+            disabled={!text.trim()}
+            className="self-start rounded-lg bg-zinc-900 px-3 py-1.5 text-xs text-white hover:bg-zinc-700 disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900"
+          >
+            Заполнить поля
+          </button>
+        </>
+      )}
+      {message && <p className={`text-xs ${message.ok ? "text-emerald-700 dark:text-emerald-400" : "text-rose-600"}`}>{message.text}</p>}
+    </div>
+  );
+}
+
+// Читает текст первого файла из ZIP (выгрузка НСПД приходит архивом с одним CSV)
+async function readZipText(file: File) {
+  const buf = new Uint8Array(await file.arrayBuffer());
+  const view = new DataView(buf.buffer);
+  let end = buf.length - 22;
+  while (end >= 0 && view.getUint32(end, true) !== 0x06054b50) end--;
+  if (end < 0) throw new Error("Не удалось прочитать архив");
+  const entry = view.getUint32(end + 16, true);
+  const method = view.getUint16(entry + 10, true);
+  const size = view.getUint32(entry + 20, true);
+  const local = view.getUint32(entry + 42, true);
+  const start = local + 30 + view.getUint16(local + 26, true) + view.getUint16(local + 28, true);
+  const data = buf.slice(start, start + size);
+  if (method === 0) return new TextDecoder().decode(data);
+  const stream = new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+  return new Response(stream).text();
+}
+
+function ImportForm({ plots, onClose, onSaved }: { plots: Plot[]; onClose: () => void; onSaved: () => void }) {
+  const [text, setText] = useState("");
+  const [sourceName, setSourceName] = useState(() => `НСПД, выгрузка от ${formatDay(today())}`);
+  const [owner, setOwner] = useState<keyof typeof owners>("unknown");
+  const [error, setError] = useState("");
+  const [result, setResult] = useState<{ created: number; skipped: string[] } | null>(null);
+
+  const numbers = useMemo(() => extractCadastralNumbers(text), [text]);
+  const known = useMemo(() => new Set(plots.map((p) => normalizeCadastralNumber(p.cadastralNumber))), [plots]);
+  const fresh = numbers.filter((n) => !known.has(n));
+
+  async function loadFile(file: File) {
+    try {
+      setError("");
+      setText(/\.zip$/i.test(file.name) ? await readZipText(file) : await file.text());
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  async function submit() {
+    try {
+      setResult(await api("/api/plots/import", "POST", { numbers: fresh, sourceName, owner }));
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  return (
+    <Modal title="Импорт из НСПД" onClose={result ? onSaved : onClose}>
+      {result ? (
+        <div className="flex flex-col gap-3 text-sm">
+          <p>
+            Добавлено участков: <b>{result.created}</b>. Источник — «{sourceName}», статус «Найден».
+          </p>
+          <p className="text-zinc-500">
+            Дальше по каждому: откройте участок, нажмите «Вставить карточку из НСПД» — заполнятся категория, ВРИ,
+            собственник и площадь, а неподходящие (не сельхозземли, ЛПХ) сразу отсеются.
+          </p>
+          <button
+            onClick={onSaved}
+            className="self-start rounded-lg bg-zinc-900 px-4 py-2 text-sm text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900"
+          >
+            Готово
+          </button>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-3">
+          <ol className="list-decimal pl-5 text-sm text-zinc-500">
+            <li>
+              В{" "}
+              <a href={NSPD_MAP} target="_blank" rel="noreferrer" className="text-sky-700 hover:underline dark:text-sky-400">
+                НСПД
+              </a>{" "}
+              — кнопка фильтра у строки поиска → «Поиск по атрибуту слоя» → «Земельные участки ЕГРН». Например: форма
+              собственности содержит «Муниципальная», адрес содержит «Новоржевский».
+            </li>
+            <li>Прокрутите список результатов до конца — в файл попадают только загруженные строки (по 40).</li>
+            <li>«Скачать список объектов» и выберите скачанный файл ниже (можно прямо ZIP) или вставьте номера текстом.</li>
+          </ol>
+          <input
+            type="file"
+            accept=".zip,.csv,.txt"
+            onChange={(e) => e.target.files?.[0] && loadFile(e.target.files[0])}
+            className="text-sm file:mr-3 file:rounded-lg file:border-0 file:bg-zinc-200 file:px-3 file:py-1.5 file:text-sm dark:file:bg-zinc-800"
+          />
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            rows={6}
+            className={inputClass}
+            placeholder="Кадастровые номера — в любом виде, по одному или списком"
+          />
+          <p className="text-sm">
+            Найдено номеров: <b>{numbers.length}</b>
+            {numbers.length > 0 && (
+              <>
+                {" "}
+                · уже в реестре: {numbers.length - fresh.length} · новых: <b>{fresh.length}</b>
+              </>
+            )}
+          </p>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <Field label="Источник">
+              <input value={sourceName} onChange={(e) => setSourceName(e.target.value)} className={inputClass} />
+            </Field>
+            <Field label="Собственник (если фильтровали по нему в НСПД)">
+              <select value={owner} onChange={(e) => setOwner(e.target.value as keyof typeof owners)} className={inputClass}>
+                {Object.entries(owners).map(([k, v]) => (
+                  <option key={k} value={k}>{v}</option>
+                ))}
+              </select>
+            </Field>
+          </div>
+          {error && <p className="text-sm text-rose-600">{error}</p>}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={submit}
+              disabled={!fresh.length}
+              className="rounded-lg bg-zinc-900 px-4 py-2 text-sm text-white hover:bg-zinc-700 disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900"
+            >
+              Добавить {fresh.length || ""} в реестр
+            </button>
+            <button onClick={onClose} className="rounded-lg px-4 py-2 text-sm text-zinc-500 hover:text-zinc-800">
+              Отмена
+            </button>
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 function PlotForm({
   plot,
   sources,
@@ -777,6 +1028,7 @@ function PlotForm({
   return (
     <Modal title={plot ? "Участок" : "Новый участок"} onClose={onClose}>
       <form onSubmit={submit} className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <NspdPaste form={form} onApply={(patch) => setForm((f) => ({ ...f, ...patch }))} />
         <Field label="Кадастровый номер">
           <input value={form.cadastralNumber} onChange={(e) => set("cadastralNumber", e.target.value)} placeholder="60:00:0000000:000" className={inputClass} />
         </Field>
@@ -810,6 +1062,16 @@ function PlotForm({
             min="0"
             value={form.areaHa ?? ""}
             onChange={(e) => set("areaHa", e.target.value === "" ? null : Number(e.target.value))}
+            className={inputClass}
+          />
+        </Field>
+        <Field label="Кадастровая стоимость, ₽">
+          <input
+            type="number"
+            step="any"
+            min="0"
+            value={form.cadastralValue ?? ""}
+            onChange={(e) => set("cadastralValue", e.target.value === "" ? null : Number(e.target.value))}
             className={inputClass}
           />
         </Field>
@@ -1207,7 +1469,12 @@ function DeadlinesView({ data, onEdit }: { data: Data; onEdit: (plot: Plot) => v
   );
 }
 
-type Editing ={ kind: "plot"; item: Plot | null } | { kind: "source"; item: Source | null } | { kind: "weights" } | null;
+type Editing =
+  | { kind: "plot"; item: Plot | null }
+  | { kind: "source"; item: Source | null }
+  | { kind: "weights" }
+  | { kind: "import" }
+  | null;
 
 export default function Registry() {
   const [data, setData] = useState<Data | null>(null);
@@ -1246,12 +1513,20 @@ export default function Registry() {
           <p className="text-sm text-zinc-500">Реестр земельных возможностей · пилот: Псковская область</p>
         </div>
         {tab === "plots" && data && (
-          <button
-            onClick={() => setEditing({ kind: "weights" })}
-            className="ml-auto rounded-lg border border-zinc-300 px-4 py-2 text-sm hover:border-zinc-500 dark:border-zinc-700"
-          >
-            Веса оценки
-          </button>
+          <>
+            <button
+              onClick={() => setEditing({ kind: "weights" })}
+              className="ml-auto rounded-lg border border-zinc-300 px-4 py-2 text-sm hover:border-zinc-500 dark:border-zinc-700"
+            >
+              Веса оценки
+            </button>
+            <button
+              onClick={() => setEditing({ kind: "import" })}
+              className="rounded-lg border border-zinc-300 px-4 py-2 text-sm hover:border-zinc-500 dark:border-zinc-700"
+            >
+              Импорт из НСПД
+            </button>
+          </>
         )}
         {tab !== "deadlines" && (
           <button
@@ -1303,6 +1578,9 @@ export default function Registry() {
       )}
       {data && editing?.kind === "weights" && (
         <WeightsForm weights={data.settings.weights} onClose={() => setEditing(null)} onSaved={saved} />
+      )}
+      {data && editing?.kind === "import" && (
+        <ImportForm plots={data.plots} onClose={() => setEditing(null)} onSaved={saved} />
       )}
       {editing?.kind === "source" && <SourceForm source={editing.item} onClose={() => setEditing(null)} onSaved={saved} />}
     </div>

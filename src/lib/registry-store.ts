@@ -9,6 +9,8 @@ import {
   emptyPlot,
   emptyRoute,
   obligationKinds,
+  owners,
+  type Owner,
   routeSteps,
   type Deadline,
   type Obligation,
@@ -28,6 +30,7 @@ import {
   type Weights,
 } from "./registry";
 import { economicsFields, emptyEconomics, type Economics, type EconomicsField } from "./economics";
+import { normalizeCadastralNumber } from "./nspd";
 
 type Data = { sources: Source[]; plots: Plot[]; settings: Settings };
 
@@ -42,6 +45,7 @@ function normalize(data: Partial<Data>): Data {
     sources: data.sources ?? [],
     plots: (data.plots ?? []).map((p) => ({
       ...p,
+      cadastralValue: p.cadastralValue ?? null,
       checks: { ...emptyChecks(), ...p.checks },
       scores: p.scores ?? {},
       economics: { ...emptyEconomics(), ...p.economics },
@@ -204,6 +208,10 @@ function cleanObligations(obligations: Partial<Obligation>[] | undefined): Oblig
 // Сложные поля проверяются отдельно; undefined — поле не прислали, оставляем как было
 function cleanPlotInput(input: Partial<PlotInput>) {
   const fields: Partial<PlotInput> = pick(emptyPlot(), input);
+  if (fields.cadastralValue !== undefined) {
+    const value = fields.cadastralValue === null ? null : Number(fields.cadastralValue);
+    fields.cadastralValue = value !== null && Number.isFinite(value) && value >= 0 ? value : null;
+  }
   const findings = cleanFindings(input.findings);
   const checks = cleanChecks(input.checks);
   const scores = cleanScores(input.scores);
@@ -245,6 +253,66 @@ export function updatePlot(id: string, input: Partial<PlotInput>) {
     if (!plot) return null;
     Object.assign(plot, cleanPlotInput(input), { updatedAt: new Date().toISOString() });
     return plot;
+  });
+}
+
+export type ImportResult = { created: number; skipped: string[]; sourceId: string };
+
+// Массовое добавление кандидатов по списку кадастровых номеров (выгрузка НСПД и т. п.).
+// Уже известные номера пропускаем; район подставляем по коду кадастрового района (60:10 → как у других участков).
+export function importPlots(input: { numbers?: unknown; sourceName?: unknown; owner?: unknown }): Promise<ImportResult> {
+  return mutate((data) => {
+    const now = new Date().toISOString();
+    const numbers = [...new Set((Array.isArray(input.numbers) ? input.numbers : []).map((n) => normalizeCadastralNumber(String(n))))].filter(
+      (n) => /^\d{2}:\d{2}:\d{7}:\d+$/.test(n),
+    );
+    const known = new Set(data.plots.map((p) => normalizeCadastralNumber(p.cadastralNumber)));
+
+    const sourceName = String(input.sourceName ?? "").trim() || "НСПД";
+    let source = data.sources.find((s) => s.name === sourceName);
+    if (!source) {
+      source = {
+        ...emptySource(),
+        name: sourceName,
+        type: "map",
+        url: "https://nspd.gov.ru/map?thematic=PKK",
+        notes: "Список номеров из поиска НСПД. Сведения по участкам заполняются вставкой карточки НСПД.",
+        id: randomUUID(),
+        createdAt: now,
+        updatedAt: now,
+      };
+      data.sources.push(source);
+    }
+
+    const districts = new Map<string, string>();
+    for (const p of data.plots) {
+      const code = p.cadastralNumber.slice(0, 5);
+      if (p.district && !districts.has(code)) districts.set(code, p.district.split(",")[0].trim());
+    }
+    const owner = typeof input.owner === "string" && input.owner in owners ? (input.owner as Owner) : "unknown";
+
+    const skipped: string[] = [];
+    let created = 0;
+    for (const number of numbers) {
+      if (known.has(number)) {
+        skipped.push(number);
+        continue;
+      }
+      data.plots.push({
+        ...emptyPlot(),
+        cadastralNumber: number,
+        district: districts.get(number.slice(0, 5)) ?? "",
+        owner,
+        sourceId: source.id,
+        notes: "Добавлен списком из НСПД. Откройте карточку участка в НСПД и вставьте её текст — поля заполнятся.",
+        id: randomUUID(),
+        createdAt: now,
+        updatedAt: now,
+      });
+      known.add(number);
+      created++;
+    }
+    return { created, skipped, sourceId: source.id };
   });
 }
 

@@ -245,6 +245,8 @@ export type Plot = {
   region: string;
   district: string;
   areaHa: number | null;
+  // Кадастровая стоимость, ₽ — от неё часто считается цена выкупа и арендная плата
+  cadastralValue: number | null;
   landCategory: string;
   permittedUse: string;
   owner: Owner;
@@ -279,6 +281,7 @@ export function emptyPlot(): PlotInput {
     region: defaultRegion,
     district: "",
     areaHa: null,
+    cadastralValue: null,
     landCategory: "Земли сельскохозяйственного назначения",
     permittedUse: "",
     owner: "unknown",
