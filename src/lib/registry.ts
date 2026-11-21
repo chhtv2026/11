@@ -113,19 +113,23 @@ const checkSteps: { factor: StopFactor; label: string }[] = [
 ];
 
 // warn — следующий шаг требует внимания (например, риск по свежей регистрации собственности)
-export type CheckProgress = { nspd: boolean; rights: boolean; next: string | null; warn?: boolean };
+export type CheckProgress = { nspd: boolean; rights: boolean; torgi: boolean; next: string | null; warn?: boolean };
 
 // Где участок в проверке и что делать дальше; у исключённого следующего шага нет
 export function checkProgress(
-  plot: Pick<Plot, "checks" | "scores" | "permittedUse" | "nspdCheckedAt" | "rightsCheckedAt">,
+  plot: Pick<Plot, "checks" | "scores" | "permittedUse" | "nspdCheckedAt" | "rightsCheckedAt" | "torgiCheckedAt">,
   vri: VriOverrides = {},
 ): CheckProgress {
   const nspd = Boolean(plot.nspdCheckedAt);
   const rights = Boolean(plot.rightsCheckedAt);
-  const done = (next: string | null) => ({ nspd, rights, next });
+  const torgi = Boolean(plot.torgiCheckedAt);
+  const done = (next: string | null) => ({ nspd, rights, torgi, next });
   if ((Object.keys(stopFactors) as StopFactor[]).some((k) => checkValue(plot, k, vri) === "no")) return done(null);
   if (!nspd) return done("сверить с карточкой НСПД");
   const step = checkSteps.find((s) => checkValue(plot, s.factor, vri) === "unknown");
+  if (step?.factor === "rights" && !rights) return done(step.label);
+  // Права третьих лиц: после Росреестра — торги и извещения, их видно только на torgi.gov.ru
+  if (!torgi) return done("права третьих лиц — проверить torgi.gov.ru");
   // Карточка Росреестра вставлена, но вопрос остался (свежая регистрация собственности) — нужен ответ администрации
   if (step?.factor === "rights" && rights) return { ...done("права третьих лиц — уточнить в администрации"), warn: true };
   if (step) return done(step.label);
@@ -287,6 +291,8 @@ export type Plot = {
   nspdCheckedAt: string | null;
   // Когда права третьих лиц сверены со справочной информацией Росреестра (ГГГГ-ММ-ДД) — второй шаг
   rightsCheckedAt: string | null;
+  // Когда участок проверен на torgi.gov.ru (торги, извещения по ст. 39.18 ЗК) и ничего не нашлось
+  torgiCheckedAt: string | null;
   landCategory: string;
   permittedUse: string;
   owner: Owner;
@@ -324,6 +330,7 @@ export function emptyPlot(): PlotInput {
     cadastralValue: null,
     nspdCheckedAt: null,
     rightsCheckedAt: null,
+    torgiCheckedAt: null,
     landCategory: "Земли сельскохозяйственного назначения",
     permittedUse: "",
     owner: "unknown",

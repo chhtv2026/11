@@ -1089,6 +1089,82 @@ function RightsPaste({ form, onApply }: { form: PlotInput; onApply: (patch: Part
   );
 }
 
+const TORGI_LOTS = "https://torgi.gov.ru/new/public/lots/reg";
+
+// Торги и извещения по участку (аукционы, ст. 39.18 ЗК) — их нет ни в НСПД, ни в справочной информации Росреестра
+function TorgiCheck({ form, onApply }: { form: PlotInput; onApply: (patch: Partial<PlotInput>) => void }) {
+  const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  const number = form.cadastralNumber.trim();
+
+  async function copyNumber() {
+    await navigator.clipboard.writeText(number);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  }
+
+  function mark(found: boolean) {
+    const day = today();
+    const line = found
+      ? `torgi.gov.ru, ${formatDay(day)}: по участку есть торги или извещение — права третьих лиц, участок исключён.`
+      : `torgi.gov.ru, ${formatDay(day)}: торгов и извещений по участку нет (все статусы).`;
+    onApply({
+      torgiCheckedAt: found ? form.torgiCheckedAt : day,
+      checks: found ? { ...form.checks, rights: "no" } : form.checks,
+      notes: [form.notes.trim(), line].filter(Boolean).join("\n"),
+    });
+    setMessage({ ok: !found, text: found ? "Участок исключён. Сохраните участок." : "Отмечено: на торгах ничего нет. Сохраните участок." });
+  }
+
+  const button = "rounded-lg px-3 py-1.5 text-xs disabled:opacity-40";
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border border-dashed border-zinc-300 p-3 text-sm sm:col-span-2 dark:border-zinc-700">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <button type="button" onClick={() => setOpen((v) => !v)} className="font-medium hover:underline">
+          {open ? "▾" : "▸"} Проверить торги и извещения (torgi.gov.ru)
+        </button>
+        {form.torgiCheckedAt && (
+          <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
+            ✓ на торгах ничего нет {formatDay(form.torgiCheckedAt)}
+          </span>
+        )}
+        {number && (
+          <button type="button" onClick={copyNumber} className="text-xs text-zinc-500 hover:text-zinc-800">
+            {copied ? "номер скопирован" : "скопировать номер"}
+          </button>
+        )}
+        <a href={TORGI_LOTS} target="_blank" rel="noreferrer" className="text-xs text-sky-700 hover:underline dark:text-sky-400">
+          открыть реестр лотов ↗
+        </a>
+      </div>
+      {open && (
+        <>
+          <p className="text-xs text-zinc-500">
+            В «Реестре лотов» вставьте номер в поле поиска и снимите фильтр «Статус» (крестик у «Статус: 2») — так видны и
+            завершённые, и отменённые торги. Если по номеру что-то нашлось (аукцион, извещение о предоставлении по ст. 39.18
+            ЗК), на участок уже есть претендент. Чего торги не покажут: права того, кто уже обрабатывает участок (п. 4 ст. 12
+            101-ФЗ), чужое заявление по 10.1 до публикации, аренду до 1 года.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => mark(false)}
+              className={`${button} bg-zinc-900 text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900`}
+            >
+              Ничего не нашлось
+            </button>
+            <button type="button" onClick={() => mark(true)} className={`${button} border border-rose-300 text-rose-700 hover:bg-rose-50 dark:border-rose-800 dark:text-rose-400`}>
+              Нашлись торги или извещение — исключить
+            </button>
+          </div>
+        </>
+      )}
+      {message && <p className={`text-xs ${message.ok ? "text-emerald-700 dark:text-emerald-400" : "text-rose-600"}`}>{message.text}</p>}
+    </div>
+  );
+}
+
 // Читает текст первого файла из ZIP (выгрузка НСПД приходит архивом с одним CSV)
 async function readZipText(file: File) {
   const buf = new Uint8Array(await file.arrayBuffer());
@@ -1307,6 +1383,7 @@ function PlotForm({
         </p>
         <NspdPaste form={form} onApply={(patch) => setForm((f) => ({ ...f, ...patch }))} />
         <RightsPaste form={form} onApply={(patch) => setForm((f) => ({ ...f, ...patch }))} />
+        <TorgiCheck form={form} onApply={(patch) => setForm((f) => ({ ...f, ...patch }))} />
         <Field label="Кадастровый номер">
           <input
             value={form.cadastralNumber}
@@ -1594,6 +1671,7 @@ function ProgressLine({ progress }: { progress: CheckProgress }) {
     <>
       {progress.nspd && <span className="text-emerald-700 dark:text-emerald-400">✓ НСПД</span>}
       {progress.rights && <span className="text-emerald-700 dark:text-emerald-400">✓ Росреестр</span>}
+      {progress.torgi && <span className="text-emerald-700 dark:text-emerald-400">✓ торги</span>}
       {progress.next &&
         (progress.warn ? (
           <span className="rounded-full bg-amber-100 px-2 font-medium text-amber-900 ring-1 ring-amber-400 dark:bg-amber-950 dark:text-amber-200 dark:ring-amber-700">
