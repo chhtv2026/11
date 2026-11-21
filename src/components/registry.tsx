@@ -1231,21 +1231,30 @@ function TorgiCheck({ form, onApply }: { form: PlotInput; onApply: (patch: Parti
 }
 
 // Читает текст первого файла из ZIP (выгрузка НСПД приходит архивом с одним CSV)
+// Читает текст всех файлов архива: ZIP из НСПД (один CSV) и Excel .xlsx с torgi.gov.ru (тоже ZIP, внутри XML)
 async function readZipText(file: File) {
   const buf = new Uint8Array(await file.arrayBuffer());
   const view = new DataView(buf.buffer);
   let end = buf.length - 22;
   while (end >= 0 && view.getUint32(end, true) !== 0x06054b50) end--;
   if (end < 0) throw new Error("Не удалось прочитать архив");
-  const entry = view.getUint32(end + 16, true);
-  const method = view.getUint16(entry + 10, true);
-  const size = view.getUint32(entry + 20, true);
-  const local = view.getUint32(entry + 42, true);
-  const start = local + 30 + view.getUint16(local + 26, true) + view.getUint16(local + 28, true);
-  const data = buf.slice(start, start + size);
-  if (method === 0) return new TextDecoder().decode(data);
-  const stream = new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
-  return new Response(stream).text();
+  const count = view.getUint16(end + 10, true);
+  let entry = view.getUint32(end + 16, true);
+  const texts: string[] = [];
+  for (let i = 0; i < count; i++) {
+    const method = view.getUint16(entry + 10, true);
+    const size = view.getUint32(entry + 20, true);
+    const local = view.getUint32(entry + 42, true);
+    const start = local + 30 + view.getUint16(local + 26, true) + view.getUint16(local + 28, true);
+    const data = buf.slice(start, start + size);
+    if (method === 0) texts.push(new TextDecoder().decode(data));
+    else if (method === 8) {
+      const stream = new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+      texts.push(await new Response(stream).text());
+    }
+    entry += 46 + view.getUint16(entry + 28, true) + view.getUint16(entry + 30, true) + view.getUint16(entry + 32, true);
+  }
+  return texts.join("\n");
 }
 
 function ImportForm({ plots, onClose, onSaved }: { plots: Plot[]; onClose: () => void; onSaved: () => void }) {
@@ -1262,7 +1271,7 @@ function ImportForm({ plots, onClose, onSaved }: { plots: Plot[]; onClose: () =>
   async function loadFile(file: File) {
     try {
       setError("");
-      setText(/\.zip$/i.test(file.name) ? await readZipText(file) : await file.text());
+      setText(/\.(zip|xlsx)$/i.test(file.name) ? await readZipText(file) : await file.text());
     } catch (err) {
       setError((err as Error).message);
     }
@@ -1316,10 +1325,20 @@ function ImportForm({ plots, onClose, onSaved }: { plots: Plot[]; onClose: () =>
               Каждую часть скачивайте и импортируйте — повторы пропустятся.
             </li>
             <li>«Скачать список объектов» и выберите скачанный файл ниже (можно прямо ZIP) или вставьте номера текстом.</li>
+            <li>
+              С{" "}
+              <a href="https://torgi.gov.ru/new/public/lots/reg" target="_blank" rel="noreferrer" className="text-sky-700 hover:underline dark:text-sky-400">
+                torgi.gov.ru
+              </a>{" "}
+              — в «Реестре лотов» задайте фильтры и нажмите синий значок выгрузки в Excel справа над списком (рядом с
+              оранжевым RSS). Выберите скачанный .xlsx ниже — номера найдутся сами, повторно выставленные лоты дадут один
+              участок. Длинный список ограничьте датой (например, за последний год) и выгружайте частями. Источник назовите,
+              например, «torgi.gov.ru, несостоявшиеся».
+            </li>
           </ol>
           <input
             type="file"
-            accept=".zip,.csv,.txt"
+            accept=".zip,.xlsx,.csv,.txt"
             onChange={(e) => e.target.files?.[0] && loadFile(e.target.files[0])}
             className="text-sm file:mr-3 file:rounded-lg file:border-0 file:bg-zinc-200 file:px-3 file:py-1.5 file:text-sm dark:file:bg-zinc-800"
           />
