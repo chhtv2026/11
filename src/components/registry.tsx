@@ -1435,8 +1435,122 @@ function PlotRouteLine({ plot }: { plot: Plot }) {
   );
 }
 
+// Раздел списка: регион и район участка (в поле «район» после запятой бывает поселение — его отбрасываем)
+const regionOf = (p: Plot) => p.region.trim() || "Регион не указан";
+const districtOf = (p: Plot) => p.district.split(",")[0].trim() || "Район не указан";
+
+type Place = { region: string | null; district: string | null };
+
+function PlotCard({ plot: p, assessment, sourceName, onEdit }: { plot: Plot; assessment: Assessment; sourceName?: string; onEdit: () => void }) {
+  const unverified = p.findings.filter((f) => !f.verified).length;
+  return (
+    <button
+      onClick={onEdit}
+      className="w-full rounded-2xl border border-zinc-200 bg-white p-4 text-left hover:border-zinc-400 dark:border-zinc-800 dark:bg-zinc-900"
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-medium">{p.cadastralNumber || p.title}</span>
+        {p.cadastralNumber && p.title && <span className="text-sm text-zinc-500">{p.title}</span>}
+        <span className="ml-auto flex items-center gap-2">
+          <AssessmentBadge assessment={assessment} />
+          <span className={`rounded-full px-2 py-0.5 text-xs ${statusColors[p.status]}`}>{plotStatuses[p.status]}</span>
+        </span>
+      </div>
+      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-zinc-500">
+        {p.district.includes(",") && <span>{p.district.split(",").slice(1).join(",").trim()}</span>}
+        {p.areaHa !== null && <span>{p.areaHa.toLocaleString("ru-RU")} га</span>}
+        <span>{owners[p.owner]}</span>
+        {sourceName && <span>источник: {sourceName}</span>}
+        {p.findings.length > 0 && (
+          <span className={unverified ? "text-amber-600" : "text-emerald-600"}>
+            выводов: {p.findings.length}
+            {unverified ? `, не проверено: ${unverified}` : ", все проверены"}
+          </span>
+        )}
+        <PlotEconomicsLine plot={p} />
+        <PlotRouteLine plot={p} />
+        <span className="ml-auto">изм. {dateFormat.format(new Date(p.updatedAt))}</span>
+      </div>
+    </button>
+  );
+}
+
+// Дерево «регион → районы» со счётчиками; выбор сужает список
+function RegionTree({ plots, place, onChange }: { plots: Plot[]; place: Place; onChange: (p: Place) => void }) {
+  const tree = useMemo(() => {
+    const regions = new Map<string, Map<string, number>>();
+    for (const p of plots) {
+      const districts = regions.get(regionOf(p)) ?? new Map<string, number>();
+      districts.set(districtOf(p), (districts.get(districtOf(p)) ?? 0) + 1);
+      regions.set(regionOf(p), districts);
+    }
+    return [...regions.entries()]
+      .sort(([a], [b]) => a.localeCompare(b, "ru"))
+      .map(([region, districts]) => ({
+        region,
+        total: [...districts.values()].reduce((sum, n) => sum + n, 0),
+        districts: [...districts.entries()].sort(([a], [b]) => a.localeCompare(b, "ru")),
+      }));
+  }, [plots]);
+
+  const item = (active: boolean) =>
+    `flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1 text-left text-sm ${active ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900" : "hover:bg-zinc-100 dark:hover:bg-zinc-800"}`;
+
+  return (
+    <>
+      {/* Узкий экран — выпадающий список */}
+      <select
+        value={place.district ? `${place.region}|${place.district}` : place.region ?? ""}
+        onChange={(e) => {
+          const [region, district] = e.target.value.split("|");
+          onChange({ region: region || null, district: district || null });
+        }}
+        className={`${inputClass} mb-3 lg:hidden`}
+        aria-label="Регион и район"
+      >
+        <option value="">Все регионы · {plots.length}</option>
+        {tree.map((r) => (
+          <optgroup key={r.region} label={r.region}>
+            <option value={r.region}>{r.region} — все районы · {r.total}</option>
+            {r.districts.map(([d, n]) => (
+              <option key={d} value={`${r.region}|${d}`}>{d} · {n}</option>
+            ))}
+          </optgroup>
+        ))}
+      </select>
+
+      {/* Широкий экран — дерево слева */}
+      <nav className="hidden flex-col gap-0.5 lg:flex" aria-label="Регионы и районы">
+        <button onClick={() => onChange({ region: null, district: null })} className={item(!place.region)}>
+          <span>Все регионы</span>
+          <span className="text-xs opacity-70">{plots.length}</span>
+        </button>
+        {tree.map((r) => (
+          <div key={r.region} className="mt-2 flex flex-col gap-0.5">
+            <button onClick={() => onChange({ region: r.region, district: null })} className={`${item(place.region === r.region && !place.district)} font-medium`}>
+              <span>{r.region}</span>
+              <span className="text-xs opacity-70">{r.total}</span>
+            </button>
+            {r.districts.map(([d, n]) => (
+              <button
+                key={d}
+                onClick={() => onChange({ region: r.region, district: d })}
+                className={`${item(place.region === r.region && place.district === d)} pl-5`}
+              >
+                <span>{d}</span>
+                <span className="text-xs opacity-70">{n}</span>
+              </button>
+            ))}
+          </div>
+        ))}
+      </nav>
+    </>
+  );
+}
+
 function PlotsView({ data, onEdit }: { data: Data; onEdit: (plot: Plot | null) => void }) {
   const [status, setStatus] = useState<PlotStatus | "all">("all");
+  const [place, setPlace] = useState<Place>({ region: null, district: null });
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<"updated" | "score" | "area">("updated");
   const sourceNames = useMemo(() => new Map(data.sources.map((s) => [s.id, s.name])), [data.sources]);
@@ -1458,13 +1572,30 @@ function PlotsView({ data, onEdit }: { data: Data; onEdit: (plot: Plot | null) =
   const plots = data.plots.filter(
     (p) =>
       (status === "all" || p.status === status) &&
+      (!place.region || regionOf(p) === place.region) &&
+      (!place.district || districtOf(p) === place.district) &&
       (!q || [p.cadastralNumber, p.title, p.district, p.notes].some((v) => v.toLowerCase().includes(q))),
   );
   if (sort === "score") plots.sort((a, b) => rank(assessments.get(b.id)!) - rank(assessments.get(a.id)!));
   if (sort === "area") plots.sort((a, b) => (b.areaHa ?? 0) - (a.areaHa ?? 0));
 
+  // Разделы: регион → район; внутри раздела — выбранная сортировка
+  const groups = new Map<string, Map<string, Plot[]>>();
+  for (const p of plots) {
+    const districts = groups.get(regionOf(p)) ?? new Map<string, Plot[]>();
+    districts.set(districtOf(p), [...(districts.get(districtOf(p)) ?? []), p]);
+    groups.set(regionOf(p), districts);
+  }
+  const sections = [...groups.entries()]
+    .sort(([a], [b]) => a.localeCompare(b, "ru"))
+    .map(([region, districts]) => ({ region, districts: [...districts.entries()].sort(([a], [b]) => a.localeCompare(b, "ru")) }));
+
   return (
-    <>
+    <div className="grid grid-cols-1 gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
+      <aside className="lg:sticky lg:top-4 lg:self-start">
+        <RegionTree plots={data.plots} place={place} onChange={setPlace} />
+      </aside>
+      <div>
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <button
           onClick={() => setStatus("all")}
@@ -1503,45 +1634,45 @@ function PlotsView({ data, onEdit }: { data: Data; onEdit: (plot: Plot | null) =
       ) : plots.length === 0 ? (
         <p className="text-sm text-zinc-500">Ничего не найдено.</p>
       ) : (
-        <ul className="flex flex-col gap-2">
-          {plots.map((p) => {
-            const unverified = p.findings.filter((f) => !f.verified).length;
-            return (
-              <li key={p.id}>
-                <button
-                  onClick={() => onEdit(p)}
-                  className="w-full rounded-2xl border border-zinc-200 bg-white p-4 text-left hover:border-zinc-400 dark:border-zinc-800 dark:bg-zinc-900"
-                >
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-medium">{p.cadastralNumber || p.title}</span>
-                    {p.cadastralNumber && p.title && <span className="text-sm text-zinc-500">{p.title}</span>}
-                    <span className="ml-auto flex items-center gap-2">
-                      <AssessmentBadge assessment={assessments.get(p.id)!} />
-                      <span className={`rounded-full px-2 py-0.5 text-xs ${statusColors[p.status]}`}>{plotStatuses[p.status]}</span>
-                    </span>
-                  </div>
-                  <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-zinc-500">
-                    <span>{[p.region, p.district].filter(Boolean).join(", ")}</span>
-                    {p.areaHa !== null && <span>{p.areaHa.toLocaleString("ru-RU")} га</span>}
-                    <span>{owners[p.owner]}</span>
-                    {p.sourceId && sourceNames.has(p.sourceId) && <span>источник: {sourceNames.get(p.sourceId)}</span>}
-                    {p.findings.length > 0 && (
-                      <span className={unverified ? "text-amber-600" : "text-emerald-600"}>
-                        выводов: {p.findings.length}
-                        {unverified ? `, не проверено: ${unverified}` : ", все проверены"}
+        <div className="flex flex-col gap-6">
+          {sections.map(({ region, districts }) => (
+            <section key={region} className="flex flex-col gap-3">
+              <h2 className="text-lg font-semibold">{region}</h2>
+              {districts.map(([district, list]) => {
+                const area = list.reduce((sum, p) => sum + (p.areaHa ?? 0), 0);
+                const excluded = list.filter((p) => assessments.get(p.id)!.kind === "excluded").length;
+                return (
+                  <details key={district} open className="group">
+                    <summary className="flex cursor-pointer list-none flex-wrap items-baseline gap-x-3 border-b border-zinc-200 pb-1 dark:border-zinc-800">
+                      <span className="text-zinc-400 transition group-open:rotate-90">▸</span>
+                      <span className="font-medium">{district}</span>
+                      <span className="text-xs text-zinc-500">
+                        участков: {list.length}
+                        {area > 0 && ` · ${area.toLocaleString("ru-RU", { maximumFractionDigits: 1 })} га`}
+                        {excluded > 0 && ` · исключено: ${excluded}`}
                       </span>
-                    )}
-                    <PlotEconomicsLine plot={p} />
-                    <PlotRouteLine plot={p} />
-                    <span className="ml-auto">изм. {dateFormat.format(new Date(p.updatedAt))}</span>
-                  </div>
-                </button>
-              </li>
-            );
-          })}
-        </ul>
+                    </summary>
+                    <ul className="mt-2 flex flex-col gap-2">
+                      {list.map((p) => (
+                        <li key={p.id}>
+                          <PlotCard
+                            plot={p}
+                            assessment={assessments.get(p.id)!}
+                            sourceName={sourceNames.get(p.sourceId)}
+                            onEdit={() => onEdit(p)}
+                          />
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                );
+              })}
+            </section>
+          ))}
+        </div>
       )}
-    </>
+      </div>
+    </div>
   );
 }
 
@@ -1679,7 +1810,7 @@ export default function Registry() {
   const overdue = open.filter((d) => daysUntil(d.date) < 0).length;
 
   return (
-    <div className="mx-auto w-full max-w-5xl px-4 py-8">
+    <div className="mx-auto w-full max-w-6xl px-4 py-8">
       <header className="mb-6 flex flex-wrap items-end gap-3">
         <div>
           <h1 className="text-2xl font-semibold">Земля в аренду</h1>
