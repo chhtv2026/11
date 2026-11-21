@@ -250,10 +250,44 @@ function cleanPlotInput(input: Partial<PlotInput>) {
   };
 }
 
+// Ошибка, которую можно показать пользователю как есть
+export class RegistryError extends Error {
+  constructor(
+    message: string,
+    readonly status = 400,
+  ) {
+    super(message);
+  }
+}
+
+// Район по коду кадастрового района (первые 5 символов номера) — как у уже известных участков
+function districtsByCode(plots: Plot[]) {
+  const districts = new Map<string, string>();
+  for (const p of plots) {
+    const code = p.cadastralNumber.slice(0, 5);
+    if (p.district && !districts.has(code)) districts.set(code, p.district.split(",")[0].trim());
+  }
+  return districts;
+}
+
+// Один кадастровый номер — один участок в реестре
+function assertUniqueNumber(data: Data, number: string, exceptId?: string) {
+  const n = normalizeCadastralNumber(number);
+  if (!n) return;
+  const twin = data.plots.find((p) => p.id !== exceptId && normalizeCadastralNumber(p.cadastralNumber) === n);
+  if (twin) {
+    throw new RegistryError(`Участок ${n} уже есть в реестре${twin.district ? ` (${twin.district})` : ""} — найдите его поиском по номеру.`, 409);
+  }
+}
+
 export function createPlot(input: Partial<PlotInput>): Promise<Plot> {
   return mutate((data) => {
     const now = new Date().toISOString();
     const plot: Plot = { ...emptyPlot(), ...cleanPlotInput(input), id: randomUUID(), createdAt: now, updatedAt: now };
+    plot.cadastralNumber = normalizeCadastralNumber(plot.cadastralNumber);
+    assertUniqueNumber(data, plot.cadastralNumber);
+    // Без района участок попадает в «Район не указан» и теряется в списке
+    if (!plot.district.trim()) plot.district = districtsByCode(data.plots).get(plot.cadastralNumber.slice(0, 5)) ?? "";
     data.plots.push(plot);
     return plot;
   });
@@ -263,7 +297,13 @@ export function updatePlot(id: string, input: Partial<PlotInput>) {
   return mutate((data) => {
     const plot = data.plots.find((p) => p.id === id);
     if (!plot) return null;
-    Object.assign(plot, cleanPlotInput(input), { updatedAt: new Date().toISOString() });
+    const fields = cleanPlotInput(input);
+    if (fields.cadastralNumber !== undefined) {
+      fields.cadastralNumber = normalizeCadastralNumber(fields.cadastralNumber);
+      assertUniqueNumber(data, fields.cadastralNumber, id);
+    }
+    Object.assign(plot, fields, { updatedAt: new Date().toISOString() });
+    if (!plot.district.trim()) plot.district = districtsByCode(data.plots).get(plot.cadastralNumber.slice(0, 5)) ?? "";
     return plot;
   });
 }
@@ -296,11 +336,7 @@ export function importPlots(input: { numbers?: unknown; sourceName?: unknown; ow
       data.sources.push(source);
     }
 
-    const districts = new Map<string, string>();
-    for (const p of data.plots) {
-      const code = p.cadastralNumber.slice(0, 5);
-      if (p.district && !districts.has(code)) districts.set(code, p.district.split(",")[0].trim());
-    }
+    const districts = districtsByCode(data.plots);
     const owner = typeof input.owner === "string" && input.owner in owners ? (input.owner as Owner) : "unknown";
 
     const skipped: string[] = [];
