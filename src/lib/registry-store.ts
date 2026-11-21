@@ -313,7 +313,8 @@ export function updatePlot(id: string, input: Partial<PlotInput>) {
 export type ImportResult = { created: number; skipped: string[]; updated: number; sourceId: string };
 
 // Участок из выгрузки торгов: номер плюс то, что о нём известно из лота
-type ImportItem = { cadastralNumber: string; owner?: Owner; areaHa?: number; note?: string; singleBid?: boolean };
+// exclude — у участка есть претендент или идёт аукцион; torgiCheckedAt — по выгрузке видно, что торгов нет
+type ImportItem = { cadastralNumber: string; owner?: Owner; areaHa?: number; note?: string; exclude?: boolean; torgiCheckedAt?: string };
 
 function cleanImportItems(value: unknown): ImportItem[] {
   if (!Array.isArray(value)) return [];
@@ -329,7 +330,8 @@ function cleanImportItems(value: unknown): ImportItem[] {
         owner: typeof item.owner === "string" && item.owner in owners ? (item.owner as Owner) : undefined,
         areaHa: Number.isFinite(area) && area > 0 ? area : undefined,
         note: typeof item.note === "string" ? item.note.slice(0, 2000) : undefined,
-        singleBid: item.singleBid === true,
+        exclude: item.exclude === true,
+        torgiCheckedAt: typeof item.torgiCheckedAt === "string" && /^\d{4}-\d{2}-\d{2}$/.test(item.torgiCheckedAt) ? item.torgiCheckedAt : undefined,
       },
     ];
   });
@@ -384,9 +386,23 @@ export function importPlots(input: {
         skipped.push(number);
         // Уже известному участку дописываем сведения о торгах, если такой записи ещё нет
         const plot = data.plots.find((p) => normalizeCadastralNumber(p.cadastralNumber) === number);
+        if (!plot) continue;
         const link = item.note?.match(/https:\/\/\S+/)?.[0];
-        if (plot && item.note && !(link && plot.notes.includes(link))) {
+        let changed = false;
+        if (item.note && !(link && plot.notes.includes(link))) {
           plot.notes = [plot.notes.trim(), item.note].filter(Boolean).join("\n");
+          changed = true;
+        }
+        // Свежий лот говорит, что участок занят, — исключаем и уже известный
+        if (item.exclude && plot.checks.rights !== "no") {
+          plot.checks = { ...plot.checks, rights: "no" };
+          changed = true;
+        }
+        if (item.torgiCheckedAt && !item.exclude && plot.torgiCheckedAt !== item.torgiCheckedAt) {
+          plot.torgiCheckedAt = item.torgiCheckedAt;
+          changed = true;
+        }
+        if (changed) {
           plot.updatedAt = now;
           updated++;
         }
@@ -400,7 +416,8 @@ export function importPlots(input: {
         owner: item.owner ?? owner,
         areaHa: item.areaHa ?? null,
         // Единственная заявка на последних торгах — у участка есть арендатор, сразу в исключённые
-        checks: item.singleBid ? { ...emptyChecks(), rights: "no" } : emptyChecks(),
+        checks: item.exclude ? { ...emptyChecks(), rights: "no" } : emptyChecks(),
+        torgiCheckedAt: item.exclude ? null : (item.torgiCheckedAt ?? null),
         sourceId: source.id,
         notes: [listNote, item.note].filter(Boolean).join("\n"),
         id: randomUUID(),

@@ -48,7 +48,7 @@ import { classifyUse, vriClassifier, vriVerdicts, type VriOverrides, type VriVer
 import { regionByCadastralNumber } from "@/lib/regions";
 import { extractCadastralNumbers, isAgriculturalLand, normalizeCadastralNumber, parseNspdCard } from "@/lib/nspd";
 import { ROSREESTR_ONLINE, ownershipClaimDeadline, parseRosreestrCard } from "@/lib/rosreestr";
-import { TORGI_LOTS, parseTorgiExport, type TorgiExport } from "@/lib/torgi";
+import { TORGI_LOTS, parseTorgiExport, torgiExcludes, torgiOutcomes as lotOutcomes, type TorgiExport, type TorgiOutcome } from "@/lib/torgi";
 
 type Data = { sources: Source[]; plots: Plot[]; settings: Settings };
 
@@ -1297,8 +1297,19 @@ function ImportForm({ plots, onClose, onSaved }: { plots: Plot[]; onClose: () =>
 
   async function submit() {
     try {
+      // Отметку «торги проверены» ставим, только если выгрузка без фильтра статуса: иначе не видно повторных лотов
+      const day = today();
       const body = torgi
-        ? { items: torgi.items, sourceName, sourceType: "auction", owner }
+        ? {
+            items: torgi.items.map((i) => ({
+              ...i,
+              exclude: torgiExcludes.includes(i.outcome),
+              torgiCheckedAt: torgi.allStatuses && (i.outcome === "free" || i.outcome === "cancelled") ? day : undefined,
+            })),
+            sourceName,
+            sourceType: "auction",
+            owner,
+          }
         : { numbers: fresh, sourceName, owner };
       setResult(await api("/api/plots/import", "POST", body));
     } catch (err) {
@@ -1352,8 +1363,9 @@ function ImportForm({ plots, onClose, onSaved }: { plots: Plot[]; onClose: () =>
               <a href="https://torgi.gov.ru/new/public/lots/reg" target="_blank" rel="noreferrer" className="text-sky-700 hover:underline dark:text-sky-400">
                 torgi.gov.ru
               </a>{" "}
-              — в «Реестре лотов» задайте фильтры и нажмите синий значок выгрузки в Excel справа над списком (рядом с
-              оранжевым RSS). Выберите скачанный .xlsx ниже — номера найдутся сами, повторно выставленные лоты дадут один
+              — в «Реестре лотов» задайте фильтры (регион, категория, ВРИ, форма собственности без «иной») <b>без фильтра
+              «Статус»</b> — тогда по каждому участку виден самый свежий лот, и проверка торгов отметится сама. Нажмите синий
+              значок выгрузки в Excel справа над списком (рядом с оранжевым RSS). Выберите скачанный .xlsx ниже — номера найдутся сами, повторно выставленные лоты дадут один
               участок. Длинный список ограничьте датой (например, за последний год) и выгружайте частями. Источник назовите,
               например, «torgi.gov.ru, несостоявшиеся».
             </li>
@@ -1370,10 +1382,27 @@ function ImportForm({ plots, onClose, onSaved }: { plots: Plot[]; onClose: () =>
                 Выгрузка torgi.gov.ru: лотов <b>{torgi.lots}</b>, разных участков <b>{torgi.items.length}</b> — по каждому
                 возьмётся последний лот (статус, даты, цена, ссылка на извещение) в заметки, площадь и собственник.
               </p>
-              <p>
-                Заявок, по всей видимости, не было: <b>{torgi.items.length - torgi.singleBid}</b> · была единственная заявка
-                (указана итоговая цена): <b>{torgi.singleBid}</b> — такие новые участки сразу уйдут в исключённые.
-              </p>
+              <ul className="flex flex-col gap-0.5">
+                {(Object.keys(lotOutcomes) as TorgiOutcome[])
+                  .filter((k) => torgi.outcomes[k])
+                  .map((k) => (
+                    <li key={k} className={torgiExcludes.includes(k) ? "text-rose-700 dark:text-rose-400" : ""}>
+                      {lotOutcomes[k]}: <b>{torgi.outcomes[k]}</b>
+                      {torgiExcludes.includes(k) && " — в исключённые"}
+                    </li>
+                  ))}
+              </ul>
+              {torgi.allStatuses ? (
+                <p className="text-emerald-700 dark:text-emerald-400">
+                  Выгрузка со всеми статусами: участкам без претендентов поставится «✓ торги проверены» на сегодня, уже
+                  известным участкам — тоже; занятые исключатся.
+                </p>
+              ) : (
+                <p className="text-amber-700 dark:text-amber-400">
+                  В выгрузке только «Не состоялся» — по ней не видно, не выставили ли участок снова, поэтому отметку «✓ торги» не
+                  ставлю. Для отметки выгрузите тот же поиск без фильтра «Статус».
+                </p>
+              )}
               {torgi.privateLots > 0 && (
                 <p className="text-zinc-500">
                   Пропущено лотов частной собственности и имущества должников: {torgi.privateLots} — по 10.1 такие участки не
@@ -1428,7 +1457,7 @@ function ImportForm({ plots, onClose, onSaved }: { plots: Plot[]; onClose: () =>
               disabled={!fresh.length && !torgi?.items.length}
               className="rounded-lg bg-zinc-900 px-4 py-2 text-sm text-white hover:bg-zinc-700 disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900"
             >
-              {torgi && !fresh.length ? "Дописать сведения о торгах" : `Добавить ${fresh.length || ""} в реестр`}
+              {torgi && !fresh.length ? "Обновить сведения о торгах" : `Добавить ${fresh.length || ""} в реестр`}
             </button>
             <button onClick={onClose} className="rounded-lg px-4 py-2 text-sm text-zinc-500 hover:text-zinc-800">
               Отмена

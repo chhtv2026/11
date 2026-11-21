@@ -5,14 +5,25 @@ import type { Owner } from "./registry";
 
 export const TORGI_LOTS = "https://torgi.gov.ru/new/public/lots/reg";
 
+// Что показывает самый свежий лот по участку
+export const torgiOutcomes = {
+  active: "идёт аукцион (объявлен, приём заявок)",
+  won: "аукцион состоялся или определяется победитель",
+  single: "не состоялся, одна заявка (указана итоговая цена)",
+  free: "не состоялся, итоговой цены нет — заявок, скорее всего, не было",
+  cancelled: "торги отменены или аннулированы",
+  other: "другой статус",
+} as const;
+export type TorgiOutcome = keyof typeof torgiOutcomes;
+// Исключаем: у участка есть претендент или идёт аукцион
+export const torgiExcludes: TorgiOutcome[] = ["active", "won", "single"];
+
 export type TorgiItem = {
   cadastralNumber: string;
   owner?: Owner;
   areaHa?: number;
   lots: number;
-  // По последнему лоту: «Итоговая цена» у несостоявшегося аукциона заполнена, когда была единственная заявка
-  // (договор с этим участником); пустая — заявок не было или никого не допустили
-  singleBid: boolean;
+  outcome: TorgiOutcome;
   note: string;
 };
 
@@ -23,8 +34,19 @@ export type TorgiExport = {
   privateLots: number;
   privateNumbers: number;
   noNumber: number;
-  singleBid: number;
+  outcomes: Record<TorgiOutcome, number>;
+  // В выгрузке есть не только «Не состоялся» — значит, её делали без фильтра статуса и по ней видно,
+  // не выставили ли участок снова. Только тогда ставим отметку «торги проверены».
+  allStatuses: boolean;
 };
+
+function outcomeOf(status: string, finalPrice: string): TorgiOutcome {
+  if (/не\s*состоял/i.test(status)) return finalPrice ? "single" : "free";
+  if (/отмен|аннулир/i.test(status)) return "cancelled";
+  if (/определение победител|состоял|заверш/i.test(status)) return "won";
+  if (/при[её]м заявок|объявлен|опубликован|рассмотрени|приостанов|торг|аукцион/i.test(status)) return "active";
+  return "other";
+}
 
 type Row = Record<string, string>;
 
@@ -72,12 +94,14 @@ export function parseTorgiExport(sharedXml: string, sheetXml: string): TorgiExpo
   for (const [letter, name] of Object.entries(rows[headerAt])) if (name && !(name in col)) col[name] = letter;
   const get = (r: Row, name: string) => (r[col[name]] ?? "").trim();
 
-  const result: TorgiExport = { lots: 0, items: [], privateLots: 0, privateNumbers: 0, noNumber: 0, singleBid: 0 };
+  const outcomes = Object.fromEntries(Object.keys(torgiOutcomes).map((k) => [k, 0])) as Record<TorgiOutcome, number>;
+  const result: TorgiExport = { lots: 0, items: [], privateLots: 0, privateNumbers: 0, noNumber: 0, outcomes, allStatuses: false };
   const byNumber = new Map<string, Row[]>();
   const privateSet = new Set<string>();
   for (const r of rows.slice(headerAt + 1)) {
     if (!get(r, "Номер извещения")) continue;
     result.lots++;
+    if (!/не\s*состоял/i.test(get(r, "Статус лота"))) result.allStatuses = true;
     const text = `${get(r, "Характеристики имущества")} ${get(r, "Описание лота")}`;
     const found =
       get(r, "Характеристики имущества").match(/Кадастровый номер земельного участка\s*:\s*(\d{2}:\d{2}:\d{1,7}:\d+)/)?.[1] ??
@@ -105,23 +129,28 @@ export function parseTorgiExport(sharedXml: string, sheetXml: string): TorgiExpo
     const last = sorted[0];
     const area = get(last, "Характеристики имущества").match(/Площадь земельного участка\s*:\s*([\d.]+)\s*м/)?.[1];
     const price = Number(get(last, "Начальная цена"));
-    const singleBid = Boolean(get(last, "Итоговая цена")) && /не состоял/i.test(get(last, "Статус лота"));
-    if (singleBid) result.singleBid++;
+    const outcome = outcomeOf(get(last, "Статус лота"), get(last, "Итоговая цена"));
+    result.outcomes[outcome]++;
     const deal = /аренд/i.test(get(last, "Описание лота")) ? "аренда" : /продаж/i.test(get(last, "Описание лота")) ? "продажа" : "";
     const parts = [
       `torgi.gov.ru: лотов по участку в выгрузке — ${lots.length}.`,
       `Последний: «${get(last, "Статус лота")}»${deal ? `, ${deal}` : ""}, приём заявок ${shortDate(get(last, "Дата и время начала подачи заявок"))}–${shortDate(get(last, "Дата и время окончания подачи заявок"))}${Number.isFinite(price) && price > 0 ? `, начальная цена ${price.toLocaleString("ru-RU")} ₽` : ""}.`,
       `Извещение: ${get(last, "Ссылка на извещение в ОЧ Реестра извещений") || get(last, "Номер извещения")}`,
-      singleBid
-        ? "Указана итоговая цена — по всей видимости, единственная заявка, договор заключают с этим участником. Участок исключён; если в протоколе другое — верните стоп-фактор «права третьих лиц»."
-        : `Итоговой цены нет — скорее всего, заявок не было, но бывает и так, что участники были, а цену никто не поднял (тогда участок могли ${deal === "продажа" ? "продать" : "передать"}). Подтвердите по протоколу и сверьте собственника в НСПД.`,
+      {
+        single: "Указана итоговая цена — по всей видимости, единственная заявка, договор заключают с этим участником. Участок исключён; если в протоколе другое — верните стоп-фактор «права третьих лиц».",
+        free: `Итоговой цены нет — скорее всего, заявок не было, но бывает и так, что участники были, а цену никто не поднял (тогда участок могли ${deal === "продажа" ? "продать" : "передать"}). Подтвердите по протоколу и сверьте собственника в НСПД.`,
+        active: "Идёт аукцион — по 10.1 сейчас не получить, участок исключён.",
+        won: "Аукцион состоялся или определяется победитель — у участка есть претендент, участок исключён.",
+        cancelled: "Торги отменены или аннулированы — посмотрите причину в извещении.",
+        other: "Проверьте статус лота на сайте.",
+      }[outcome],
     ];
     result.items.push({
       cadastralNumber: number,
       owner: parseOwner(get(last, "Форма собственности")),
       areaHa: area ? Math.round(Number(area)) / 10_000 : undefined,
       lots: lots.length,
-      singleBid,
+      outcome,
       note: parts.join(" "),
     });
   }
