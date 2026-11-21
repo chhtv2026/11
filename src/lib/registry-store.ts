@@ -32,7 +32,7 @@ import {
 } from "./registry";
 import { economicsFields, emptyEconomics, type Economics, type EconomicsField } from "./economics";
 import { normalizeCadastralNumber } from "./nspd";
-import { regionByCadastralNumber } from "./regions";
+import { districtByCadastralNumber, regionByCadastralNumber } from "./regions";
 import { vriClassifier, vriVerdicts, type VriVerdict } from "./vri";
 
 type Data = { sources: Source[]; plots: Plot[]; settings: Settings };
@@ -51,6 +51,8 @@ function normalize(data: Partial<Data>): Data {
       cadastralValue: p.cadastralValue ?? null,
       // Карточки, вставленные до появления отметки, узнаём по кадастровой стоимости — её даёт только НСПД
       nspdCheckedAt: p.nspdCheckedAt !== undefined ? p.nspdCheckedAt : p.cadastralValue != null ? p.updatedAt.slice(0, 10) : null,
+      // Район не указан — берём по кадастровому номеру
+      district: p.district?.trim() ? p.district : (districtByCadastralNumber(p.cadastralNumber ?? "") ?? ""),
       rightsCheckedAt: p.rightsCheckedAt ?? null,
       torgiCheckedAt: p.torgiCheckedAt ?? null,
       checks: { ...emptyChecks(), ...p.checks },
@@ -287,7 +289,7 @@ export function createPlot(input: Partial<PlotInput>): Promise<Plot> {
     plot.cadastralNumber = normalizeCadastralNumber(plot.cadastralNumber);
     assertUniqueNumber(data, plot.cadastralNumber);
     // Без района участок попадает в «Район не указан» и теряется в списке
-    if (!plot.district.trim()) plot.district = districtsByCode(data.plots).get(plot.cadastralNumber.slice(0, 5)) ?? "";
+    if (!plot.district.trim()) plot.district = districtsByCode(data.plots).get(plot.cadastralNumber.slice(0, 5)) ?? districtByCadastralNumber(plot.cadastralNumber) ?? "";
     data.plots.push(plot);
     return plot;
   });
@@ -303,7 +305,7 @@ export function updatePlot(id: string, input: Partial<PlotInput>) {
       assertUniqueNumber(data, fields.cadastralNumber, id);
     }
     Object.assign(plot, fields, { updatedAt: new Date().toISOString() });
-    if (!plot.district.trim()) plot.district = districtsByCode(data.plots).get(plot.cadastralNumber.slice(0, 5)) ?? "";
+    if (!plot.district.trim()) plot.district = districtsByCode(data.plots).get(plot.cadastralNumber.slice(0, 5)) ?? districtByCadastralNumber(plot.cadastralNumber) ?? "";
     return plot;
   });
 }
@@ -394,7 +396,7 @@ export function importPlots(input: {
         ...emptyPlot(),
         cadastralNumber: number,
         region: regionByCadastralNumber(number) ?? emptyPlot().region,
-        district: districts.get(number.slice(0, 5)) ?? "",
+        district: districts.get(number.slice(0, 5)) ?? districtByCadastralNumber(number) ?? "",
         owner: item.owner ?? owner,
         areaHa: item.areaHa ?? null,
         // Единственная заявка на последних торгах — у участка есть арендатор, сразу в исключённые
