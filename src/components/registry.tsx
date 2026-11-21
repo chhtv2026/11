@@ -1607,11 +1607,13 @@ function RegionTree({ plots, place, onChange }: { plots: Plot[]; place: Place; o
   );
 }
 
+type SortMode = "checked" | "areaAsc" | "area" | "score" | "updated";
+
 function PlotsView({ data, onEdit }: { data: Data; onEdit: (plot: Plot | null) => void }) {
   const [status, setStatus] = useState<PlotStatus | "all">("all");
   const [place, setPlace] = useState<Place>({ region: null, district: null });
   const [query, setQuery] = useState("");
-  const [sort, setSort] = useState<"updated" | "score" | "area">("updated");
+  const [sort, setSort] = useState<SortMode>("checked");
   const sourceNames = useMemo(() => new Map(data.sources.map((s) => [s.id, s.name])), [data.sources]);
 
   const counts = useMemo(() => {
@@ -1635,7 +1637,13 @@ function PlotsView({ data, onEdit }: { data: Data; onEdit: (plot: Plot | null) =
       (!place.district || districtOf(p) === place.district) &&
       (!q || [p.cadastralNumber, p.title, p.district, p.notes].some((v) => v.toLowerCase().includes(q))),
   );
+  // Площадь без значения — в конец списка
+  const areaAsc = (a: Plot, b: Plot) => (a.areaHa ?? Infinity) - (b.areaHa ?? Infinity);
+  // Сначала сверенные с НСПД, потом ещё не сверенные, исключённые — в самом низу
+  const stage = (p: Plot) => (assessments.get(p.id)!.kind === "excluded" ? 2 : p.nspdCheckedAt ? 0 : 1);
+  if (sort === "checked") plots.sort((a, b) => stage(a) - stage(b) || areaAsc(a, b));
   if (sort === "score") plots.sort((a, b) => rank(assessments.get(b.id)!) - rank(assessments.get(a.id)!));
+  if (sort === "areaAsc") plots.sort(areaAsc);
   if (sort === "area") plots.sort((a, b) => (b.areaHa ?? 0) - (a.areaHa ?? 0));
 
   // Разделы: регион → район; внутри раздела — выбранная сортировка
@@ -1679,9 +1687,11 @@ function PlotsView({ data, onEdit }: { data: Data; onEdit: (plot: Plot | null) =
             className={`${inputClass} sm:w-64`}
           />
           <select value={sort} onChange={(e) => setSort(e.target.value as typeof sort)} className={`${inputClass} w-auto`} aria-label="Сортировка">
-            <option value="updated">Недавно изменённые</option>
+            <option value="checked">Сверенные с НСПД сверху, площадь ↑</option>
+            <option value="areaAsc">По площади ↑ (от меньшей)</option>
+            <option value="area">По площади ↓ (от большей)</option>
             <option value="score">По баллу</option>
-            <option value="area">По площади</option>
+            <option value="updated">Недавно изменённые</option>
           </select>
         </div>
       </div>
