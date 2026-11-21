@@ -1937,7 +1937,21 @@ type SortMode = "checked" | "areaAsc" | "area" | "score" | "updated";
 
 function PlotsView({ data, onEdit }: { data: Data; onEdit: (plot: Plot | null) => void }) {
   const [status, setStatus] = useState<PlotStatus | "all">("all");
-  const [place, setPlace] = useState<Place>({ region: null, district: null });
+  const [place, setPlaceState] = useState<Place>({ region: null, district: null });
+  // Выбранный регион и район запоминаем в браузере: после перезагрузки страницы не надо искать район заново
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("plots.place") ?? "null") as Place | null;
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- восстановление выбора после загрузки
+      if (saved && (saved.region === null || typeof saved.region === "string")) setPlaceState(saved);
+    } catch {}
+  }, []);
+  const setPlace = (next: Place) => {
+    setPlaceState(next);
+    try {
+      localStorage.setItem("plots.place", JSON.stringify(next));
+    } catch {}
+  };
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<SortMode>("checked");
   const sourceNames = useMemo(() => new Map(data.sources.map((s) => [s.id, s.name])), [data.sources]);
