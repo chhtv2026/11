@@ -849,6 +849,18 @@ function WeightsForm({ weights, onClose, onSaved }: { weights: Weights; onClose:
 const NSPD_MAP = "https://nspd.gov.ru/map?thematic=PKK";
 
 // Вставка скопированной карточки участка из НСПД: раскладывает сведения по полям формы
+// Кнопка «Сохранить» прямо в блоке проверки — чтобы не прокручивать форму вниз
+function SaveHere() {
+  return (
+    <button
+      type="submit"
+      className="self-start rounded-lg bg-emerald-700 px-3 py-1.5 text-xs text-white hover:bg-emerald-600 dark:bg-emerald-600 dark:hover:bg-emerald-500"
+    >
+      Сохранить участок
+    </button>
+  );
+}
+
 function NspdPaste({ form, onApply }: { form: PlotInput; onApply: (patch: Partial<PlotInput>) => void }) {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
@@ -976,6 +988,7 @@ function NspdPaste({ form, onApply }: { form: PlotInput; onApply: (patch: Partia
         </>
       )}
       {message && <p className={`text-xs ${message.ok ? "text-emerald-700 dark:text-emerald-400" : "text-rose-600"}`}>{message.text}</p>}
+      {message?.ok && <SaveHere />}
     </div>
   );
 }
@@ -985,8 +998,10 @@ function RightsPaste({ form, onApply }: { form: PlotInput; onApply: (patch: Part
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
   const [message, setMessage] = useState<{ tone: "ok" | "warn" | "bad"; text: string } | null>(null);
+  const [applied, setApplied] = useState(false);
 
   function apply() {
+    setApplied(false);
     const card = parseRosreestrCard(text);
     const current = normalizeCadastralNumber(form.cadastralNumber);
     if (card.cadastralNumber && current && card.cadastralNumber !== current) {
@@ -1032,6 +1047,7 @@ function RightsPaste({ form, onApply }: { form: PlotInput; onApply: (patch: Part
       checks: { ...form.checks, rights },
       notes: [form.notes.trim(), ...lines].filter(Boolean).join("\n"),
     });
+    setApplied(true);
     setText("");
   }
 
@@ -1085,6 +1101,7 @@ function RightsPaste({ form, onApply }: { form: PlotInput; onApply: (patch: Part
         </>
       )}
       {message && <p className={`text-xs ${tone[message.tone]}`}>{message.text}</p>}
+      {applied && message && <SaveHere />}
     </div>
   );
 }
@@ -1208,6 +1225,7 @@ function TorgiCheck({ form, onApply }: { form: PlotInput; onApply: (patch: Parti
         </>
       )}
       {message && <p className={`text-xs ${message.ok ? "text-emerald-700 dark:text-emerald-400" : "text-rose-600"}`}>{message.text}</p>}
+      {message && <SaveHere />}
     </div>
   );
 }
@@ -1428,6 +1446,7 @@ function PlotForm({
         <p className="flex flex-wrap gap-x-3 text-sm sm:col-span-2">
           <ProgressLine progress={checkProgress(form, settings.vri)} />
         </p>
+        {error && <p className="text-sm text-rose-600 sm:col-span-2">{error}</p>}
         <NspdPaste form={form} onApply={(patch) => setForm((f) => ({ ...f, ...patch }))} />
         <RightsPaste form={form} onApply={(patch) => setForm((f) => ({ ...f, ...patch }))} />
         <TorgiCheck form={form} onApply={(patch) => setForm((f) => ({ ...f, ...patch }))} />
