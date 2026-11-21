@@ -112,7 +112,8 @@ const checkSteps: { factor: StopFactor; label: string }[] = [
   { factor: "permittedUse", label: "вид разрешённого использования" },
 ];
 
-export type CheckProgress = { nspd: boolean; rights: boolean; next: string | null };
+// warn — следующий шаг требует внимания (например, риск по свежей регистрации собственности)
+export type CheckProgress = { nspd: boolean; rights: boolean; next: string | null; warn?: boolean };
 
 // Где участок в проверке и что делать дальше; у исключённого следующего шага нет
 export function checkProgress(
@@ -126,7 +127,7 @@ export function checkProgress(
   if (!nspd) return done("сверить с карточкой НСПД");
   const step = checkSteps.find((s) => checkValue(plot, s.factor, vri) === "unknown");
   // Карточка Росреестра вставлена, но вопрос остался (свежая регистрация собственности) — нужен ответ администрации
-  if (step?.factor === "rights" && rights) return done("права третьих лиц — уточнить в администрации");
+  if (step?.factor === "rights" && rights) return { ...done("права третьих лиц — уточнить в администрации"), warn: true };
   if (step) return done(step.label);
   const rated = (Object.keys(criteria) as Criterion[]).filter((k) => plot.scores[k]).length;
   return done(rated < Object.keys(criteria).length ? "оценить баллами" : null);

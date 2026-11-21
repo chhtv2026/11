@@ -1594,7 +1594,14 @@ function ProgressLine({ progress }: { progress: CheckProgress }) {
     <>
       {progress.nspd && <span className="text-emerald-700 dark:text-emerald-400">✓ НСПД</span>}
       {progress.rights && <span className="text-emerald-700 dark:text-emerald-400">✓ Росреестр</span>}
-      {progress.next && <span className="text-sky-700 dark:text-sky-400">далее: {progress.next}</span>}
+      {progress.next &&
+        (progress.warn ? (
+          <span className="rounded-full bg-amber-100 px-2 font-medium text-amber-900 ring-1 ring-amber-400 dark:bg-amber-950 dark:text-amber-200 dark:ring-amber-700">
+            ⚠ далее: {progress.next}
+          </span>
+        ) : (
+          <span className="text-sky-700 dark:text-sky-400">далее: {progress.next}</span>
+        ))}
     </>
   );
 }
