@@ -1369,11 +1369,21 @@ function ImportForm({
     <Modal title="Импорт из НСПД" onClose={result ? onSaved : onClose}>
       {result ? (
         <div className="flex flex-col gap-3 text-sm">
-          <p>
-            Добавлено участков: <b>{result.created}</b>. Источник — «{sourceName}», статус «Найден».
-            {result.updated > 0 && <> Уже известным участкам обновлены сведения о торгах: {result.updated}.</>}
-            {result.absentMarked > 0 && <> Участкам без лотов в выгрузке отмечено «✓ торги»: {result.absentMarked}.</>}
-          </p>
+          <ul className="flex flex-col gap-1">
+            <li>
+              Добавлено участков: <b>{result.created}</b>. Источник — «{sourceName}», статус «Найден».
+            </li>
+            {result.updated > 0 && (
+              <li>
+                Уже известным участкам обновлены сведения о торгах: <b>{result.updated}</b>.
+              </li>
+            )}
+            {result.absentMarked > 0 && (
+              <li className="text-emerald-700 dark:text-emerald-400">
+                ✓ торги отмечены участкам без лотов в выгрузке: <b>{result.absentMarked}</b>.
+              </li>
+            )}
+          </ul>
           <p className="text-zinc-500">
             Дальше по каждому: откройте участок, нажмите «Вставить карточку из НСПД» — заполнятся категория, ВРИ,
             собственник и площадь, а неподходящие (не сельхозземли, ЛПХ, дороги) сразу отсеются.
