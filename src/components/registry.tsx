@@ -1307,6 +1307,20 @@ const restrictionFindings = [
 ] as const;
 type RestrictionKey = (typeof restrictionFindings)[number]["key"];
 
+// Начало строки заметок с итогом проверки ограничений и отметка, что проверял Claude
+const RESTRICTIONS_NOTE_PREFIX = "Ограничения по карте НСПД";
+const CLAUDE_MARK = "(проверил Claude — подтвердите)";
+const CLAUDE_CONFIRMED = "(проверил Claude, подтверждено)";
+
+// Отмеченные ранее зоны; у старых записей без списка — узнаём по тексту пунктов в заметках
+function savedZones(form: PlotInput): RestrictionKey[] {
+  const keys = new Set<string>(restrictionFindings.map((f) => f.key));
+  if (form.restrictionZones?.length) return form.restrictionZones.filter((z): z is RestrictionKey => keys.has(z));
+  return restrictionFindings.filter((f) => form.notes.includes(f.note)).map((f) => f.key);
+}
+
+const restrictionLines = (notes: string) => notes.split("\n").filter((l) => l.startsWith(RESTRICTIONS_NOTE_PREFIX));
+
 // Ограничения: ЗОУИТ, ООПТ, лесничества — по слоям карты НСПД (бесплатно; «Градпроработка» в НСПД платная)
 function RestrictionsCheck({
   form,
@@ -1327,7 +1341,14 @@ function RestrictionsCheck({
     if (scrollOnMount) box.current?.scrollIntoView({ block: "start" });
   }, [scrollOnMount]);
   const [copied, setCopied] = useState(false);
-  const [found, setFound] = useState<Set<RestrictionKey>>(new Set());
+  const [found, setFound] = useState<Set<RestrictionKey>>(() => new Set(savedZones(form)));
+  const lines = restrictionLines(form.notes);
+  const byClaude = lines.some((l) => l.includes(CLAUDE_MARK));
+
+  function confirmClaude(line: string) {
+    onApply({ notes: form.notes.replace(line, line.replace(CLAUDE_MARK, CLAUDE_CONFIRMED)) });
+    setMessage({ tone: "ok", text: "Проверка Claude подтверждена. Сохраните участок." });
+  }
   const [comment, setComment] = useState("");
   const [message, setMessage] = useState<{ tone: "ok" | "warn" | "bad"; text: string } | null>(null);
   const number = form.cadastralNumber.trim();
@@ -1350,6 +1371,7 @@ function RestrictionsCheck({
     const extra = comment.trim() ? [`Уточнение: ${comment.trim()}`] : [];
     onApply({
       restrictionsCheckedAt: day,
+      restrictionZones: nothing ? [] : items.map((f) => f.key),
       checks: { ...form.checks, restrictions: value },
       notes: form.notes.includes(`${formatDay(day)}: ${[...lines, ...extra].join(" ")}`)
         ? form.notes
@@ -1381,6 +1403,11 @@ function RestrictionsCheck({
             ✓ ограничения проверены {formatDay(form.restrictionsCheckedAt)}
           </span>
         )}
+        {byClaude && (
+          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-200">
+            проверил Claude — подтвердите
+          </span>
+        )}
         {number && (
           <button type="button" onClick={copyNumber} className="text-xs text-zinc-500 hover:text-zinc-800">
             {copied ? "номер скопирован" : "скопировать номер"}
@@ -1396,6 +1423,25 @@ function RestrictionsCheck({
           открыть карту НСПД со слоями зон ↗
         </a>
       </div>
+      {lines.length > 0 && (
+        <div className="flex flex-col gap-1 rounded-lg bg-zinc-50 px-3 py-2 text-xs dark:bg-zinc-900">
+          <p className="font-medium text-zinc-600 dark:text-zinc-400">Записано в заметках:</p>
+          {lines.map((l) => (
+            <p key={l} className={l.includes(CLAUDE_MARK) ? "text-amber-900 dark:text-amber-200" : "text-zinc-700 dark:text-zinc-300"}>
+              {l}
+              {l.includes(CLAUDE_MARK) && (
+                <button
+                  type="button"
+                  onClick={() => confirmClaude(l)}
+                  className="ml-2 rounded border border-emerald-400 px-1.5 text-emerald-800 hover:bg-emerald-50 dark:border-emerald-700 dark:text-emerald-300"
+                >
+                  ✓ подтверждаю
+                </button>
+              )}
+            </p>
+          ))}
+        </div>
+      )}
       {open && (
         <>
           <p className="text-xs text-zinc-500">
@@ -2570,7 +2616,8 @@ function claudeRestrictionsTask(district: string, plots: Plot[]) {
     "",
     "Как записывать: сначала сделай копию data/registry.json, затем PATCH http://localhost:3001/api/plots/<id> —",
     "restrictionsCheckedAt — сегодняшняя дата; checks.restrictions: yes — зон нет или только ограничения (вода, сети, дороги); unknown — ООПТ, объект культурного наследия, санзона, лесничество краем; no — участок в основном в лесничестве;",
-    "в notes добавь строку «Ограничения по карте НСПД, <дата> (проверил Claude — подтвердите): …» с найденными зонами и их номерами.",
+    `restrictionZones — найденные зоны, чтобы в карточке стояли галочки: ${restrictionFindings.map((f) => `${f.key} (${f.label})`).join(", ")}; ничего не нашлось — пустой список;`,
+    `в notes добавь строку «${RESTRICTIONS_NOTE_PREFIX}, <дата> ${CLAUDE_MARK}: …» с найденными зонами и их номерами.`,
     `Фразу «${FOREST_EDGE_NOTE}» пиши, только если пересечение с лесничеством видно точно — по ней в запрос в администрацию попадает вопрос о границах.`,
     "Если интерфейс НСПД сбоит — пропусти участок и в конце скажи, какие остались непроверенными.",
   ].join("\n");

@@ -60,6 +60,7 @@ function normalize(data: Partial<Data>): Data {
       torgiCheckedAt: p.torgiCheckedAt ?? null,
       torgiLotDate: p.torgiLotDate ?? null,
       restrictionsCheckedAt: p.restrictionsCheckedAt ?? null,
+      restrictionZones: p.restrictionZones ?? [],
       adminRequestAt: p.adminRequestAt ?? null,
       checks: { ...emptyChecks(), ...p.checks },
       scores: p.scores ?? {},
@@ -234,6 +235,10 @@ function cleanPlotInput(input: Partial<PlotInput>) {
   const fields: Partial<PlotInput> = pick(emptyPlot(), input);
   for (const key of ["nspdCheckedAt", "rightsCheckedAt", "torgiCheckedAt", "torgiLotDate", "restrictionsCheckedAt", "adminRequestAt"] as const) {
     if (fields[key] !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(String(fields[key]))) fields[key] = null;
+  }
+  if (fields.restrictionZones !== undefined) {
+    const zones = Array.isArray(fields.restrictionZones) ? fields.restrictionZones : [];
+    fields.restrictionZones = [...new Set(zones.filter((z) => typeof z === "string" && /^[a-zA-Z]{1,20}$/.test(z)))];
   }
   if (fields.cadastralValue !== undefined) {
     const value = fields.cadastralValue === null ? null : Number(fields.cadastralValue);

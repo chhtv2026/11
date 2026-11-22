@@ -164,9 +164,11 @@ export function checkProgress(
   const torgi = Boolean(plot.torgiCheckedAt);
   const restrictions = Boolean(plot.restrictionsCheckedAt);
   const request = plot.adminRequestAt ?? null;
-  const zoneOpen = restrictions && checkValue(plot, "restrictions", vri) === "unknown";
+  const excluded = (Object.keys(stopFactors) as StopFactor[]).some((k) => checkValue(plot, k, vri) === "no");
+  // У исключённого участка режим зоны выяснять незачем — плашку не показываем
+  const zoneOpen = !excluded && restrictions && checkValue(plot, "restrictions", vri) === "unknown";
   const done = (next: string | null) => ({ nspd, rights, torgi, restrictions, next, request, zoneOpen });
-  if ((Object.keys(stopFactors) as StopFactor[]).some((k) => checkValue(plot, k, vri) === "no")) return done(null);
+  if (excluded) return done(null);
   if (!nspd) return done("сверить с карточкой НСПД");
   const step = checkSteps.find((s) => checkValue(plot, s.factor, vri) === "unknown");
   if (step?.factor === "rights" && !rights) return done(step.label);
@@ -354,6 +356,8 @@ export type Plot = {
   torgiLotDate: string | null;
   // Когда участок сверен со слоями ЗОУИТ, ООПТ и лесничеств на карте НСПД
   restrictionsCheckedAt: string | null;
+  // Какие зоны отмечены при проверке ограничений (ключи пунктов «Отметьте всё, что нашлось»)
+  restrictionZones: string[];
   // Когда по участку отправлен запрос в администрацию (договоры до года, заявления, торги); ответ — 30 дней (59-ФЗ)
   adminRequestAt: string | null;
   landCategory: string;
@@ -396,6 +400,7 @@ export function emptyPlot(): PlotInput {
     torgiCheckedAt: null,
     torgiLotDate: null,
     restrictionsCheckedAt: null,
+    restrictionZones: [],
     adminRequestAt: null,
     landCategory: "Земли сельскохозяйственного назначения",
     permittedUse: "",
