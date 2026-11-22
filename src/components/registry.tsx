@@ -49,7 +49,7 @@ import {
 
 import { calculate, economicsFields, type Economics, type EconomicsField, type EconomicsResult } from "@/lib/economics";
 import { classifyUse, vriClassifier, vriVerdicts, type VriOverrides, type VriVerdict } from "@/lib/vri";
-import { districtByCadastralNumber, regionByCadastralNumber } from "@/lib/regions";
+import { districtByCadastralNumber, districtsOfRegion, regionByCadastralNumber } from "@/lib/regions";
 import { extractCadastralNumbers, isAgriculturalLand, normalizeCadastralNumber, parseNspdCard } from "@/lib/nspd";
 import { ROSREESTR_ONLINE, ownershipClaimDeadline, parseRosreestrCard } from "@/lib/rosreestr";
 import { TORGI_LOTS, parseTorgiExport, torgiExcludes, torgiOutcomes as lotOutcomes, type TorgiExport, type TorgiOutcome } from "@/lib/torgi";
@@ -2032,6 +2032,12 @@ function importMarks(plots: Plot[], imports: ImportRecord[]) {
     if (/^\d{2}:\d{2}:/.test(p.cadastralNumber)) set.add(p.cadastralNumber.slice(0, 5));
     codes.set(key, set);
   }
+  for (const region of new Set(plots.map(regionOf))) {
+    for (const { code, name } of districtsOfRegion(region)) {
+      const key = `${region}|${name}`;
+      codes.set(key, (codes.get(key) ?? new Set<string>()).add(code));
+    }
+  }
   const pick = (kind: ImportRecord["kind"], set: Set<string>) =>
     [...set].map((c) => latest(kind, c)).reduce<string | null>((max, d) => (d && (!max || d > max) ? d : max), null);
   return new Map([...codes].map(([key, set]) => [key, { nspd: pick("nspd", set), torgi: pick("torgi", set) }]));
@@ -2066,6 +2072,20 @@ function RegionTree({
   onChange: (p: Place) => void;
 }) {
   const marks = useMemo(() => importMarks(plots, imports), [plots, imports]);
+  // Районы без участков показываем по кнопке — так видно, куда выгрузку ещё не загружали
+  const [showAll, setShowAllState] = useState(false);
+  useEffect(() => {
+    try {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- читаем localStorage только после гидрации
+      setShowAllState(localStorage.getItem("plots.showAllDistricts") === "1");
+    } catch {}
+  }, []);
+  const setShowAll = (value: boolean) => {
+    setShowAllState(value);
+    try {
+      localStorage.setItem("plots.showAllDistricts", value ? "1" : "0");
+    } catch {}
+  };
   const tree = useMemo(() => {
     const regions = new Map<string, Map<string, number>>();
     for (const p of plots) {
@@ -2073,14 +2093,22 @@ function RegionTree({
       districts.set(districtOf(p), (districts.get(districtOf(p)) ?? 0) + 1);
       regions.set(regionOf(p), districts);
     }
+    if (showAll) {
+      for (const [region, districts] of regions) {
+        for (const { name } of districtsOfRegion(region)) if (!districts.has(name)) districts.set(name, 0);
+      }
+    }
     return [...regions.entries()]
       .sort(([a], [b]) => a.localeCompare(b, "ru"))
       .map(([region, districts]) => ({
         region,
         total: [...districts.values()].reduce((sum, n) => sum + n, 0),
         districts: [...districts.entries()].sort(([a], [b]) => a.localeCompare(b, "ru")),
+        // Сколько районов региона по справочнику и сколько из них без участков
+        known: districtsOfRegion(region).length,
+        empty: districtsOfRegion(region).filter(({ name }) => !plots.some((p) => regionOf(p) === region && districtOf(p) === name)).length,
       }));
-  }, [plots]);
+  }, [plots, showAll]);
 
   const item = (active: boolean) =>
     `flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1 text-left text-sm ${active ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900" : "hover:bg-zinc-100 dark:hover:bg-zinc-800"}`;
@@ -2104,6 +2132,12 @@ function RegionTree({
             {r.districts.map(([d, n]) => (
               <option key={d} value={`${r.region}|${d}`}>{d} · {n}</option>
             ))}
+            {!showAll &&
+              districtsOfRegion(r.region)
+                .filter(({ name }) => !r.districts.some(([d]) => d === name))
+                .map(({ name }) => (
+                  <option key={name} value={`${r.region}|${name}`}>{name} · 0</option>
+                ))}
           </optgroup>
         ))}
       </select>
@@ -2124,7 +2158,7 @@ function RegionTree({
               <button
                 key={d}
                 onClick={() => onChange({ region: r.region, district: d })}
-                className={`${item(place.region === r.region && place.district === d)} pl-5`}
+                className={`${item(place.region === r.region && place.district === d)} pl-5 ${n === 0 ? "opacity-60" : ""}`}
               >
                 <span className="flex flex-col">
                   <span>{d}</span>
@@ -2133,6 +2167,11 @@ function RegionTree({
                 <span className="text-xs opacity-70">{n}</span>
               </button>
             ))}
+            {r.empty > 0 && (
+              <button onClick={() => setShowAll(!showAll)} className="pl-5 text-left text-xs text-sky-700 hover:underline dark:text-sky-400">
+                {showAll ? `скрыть районы без участков (${r.empty})` : `показать все районы (ещё ${r.empty} без участков)`}
+              </button>
+            )}
           </div>
         ))}
       </nav>
@@ -2465,7 +2504,7 @@ function PlotsView({ data, onEdit, onChanged }: { data: Data; onEdit: (plot: Plo
 
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
-      <aside className="lg:sticky lg:top-4 lg:self-start">
+      <aside className="lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:self-start lg:overflow-y-auto">
         <RegionTree plots={data.plots} imports={data.settings.imports} place={place} onChange={setPlace} />
       </aside>
       <div>
@@ -2507,7 +2546,11 @@ function PlotsView({ data, onEdit, onChanged }: { data: Data; onEdit: (plot: Plo
           В реестре пока нет участков. Начните с источника на вкладке «Источники», затем добавьте участки из него.
         </div>
       ) : plots.length === 0 ? (
-        <p className="text-sm text-zinc-500">Ничего не найдено.</p>
+        <p className="text-sm text-zinc-500">
+          {place.district && !data.plots.some((p) => districtOf(p) === place.district)
+            ? `В районе «${place.district}» пока нет участков — загрузите выгрузку НСПД по району кнопкой «Импорт из НСПД».`
+            : "Ничего не найдено."}
+        </p>
       ) : (
         <div className="flex flex-col gap-6">
           {sections.map(({ region, districts }) => (

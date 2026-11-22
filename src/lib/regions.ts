@@ -130,6 +130,13 @@ const cadastralDistricts: Record<string, string> = {
   "60:27": "город Псков",
 };
 
+// Все районы региона из справочника кадастровых районов: название → код («Гдовский район» → «60:03»)
+export function districtsOfRegion(region: string) {
+  return Object.entries(cadastralDistricts)
+    .filter(([code]) => cadastralRegions[code.slice(0, 2)] === region)
+    .map(([code, name]) => ({ code, name }));
+}
+
 export function districtByCadastralNumber(number: string) {
   return cadastralDistricts[number.trim().slice(0, 5)];
 }
