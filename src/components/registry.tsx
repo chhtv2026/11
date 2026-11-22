@@ -2540,6 +2540,32 @@ function downloadDoc(text: string, fileName: string, headerLines: number) {
   URL.revokeObjectURL(url);
 }
 
+// Участки района без проверки ограничений (и не исключённые) — их можно поручить Claude
+function restrictionsToCheck(plots: Plot[], settings: Settings) {
+  return plots.filter((p) => !p.restrictionsCheckedAt && assess(p, settings.weights, settings.vri).kind !== "excluded");
+}
+
+// Готовое задание для Claude: проверить ограничения по карте НСПД и записать в карточки
+function claudeRestrictionsTask(district: string, plots: Plot[]) {
+  return [
+    `Проверь ограничения (ЗОУИТ, ООПТ, лесничества) по карте НСПД у участков района «${district}» из реестра «Земля в аренду» — у них ограничения ещё не проверены:`,
+    ...plots.map((p, i) => `${i + 1}. ${p.cadastralNumber}`),
+    "",
+    "Как проверять — во встроенном браузере, на карте НСПД; мои данные никуда не вводи, платные сервисы («Градостроительная проработка», выписки) не открывай:",
+    `- карта со слоями зон: ${NSPD_ZONES_MAP}`,
+    "- найди участок поиском (настройки поиска → «Поиск по виду объекта» → «Объекты недвижимости»);",
+    "- переключи «Поиск по включённым слоям», отметь пять групп ЗОУИТ, обведи все контуры участка («Выбор объектов контуром» → «Выбор полигоном») и дождись списка зон — до минуты;",
+    "- щёлкни по каждой найденной зоне и проверь, задевает ли она сами контуры участка, а не только рамку обводки; посмотри на подложке, нет ли рядом реки, ручья или озера (водоохранная зона);",
+    "- в конце верни поиск в «Объекты недвижимости».",
+    "",
+    "Как записывать: сначала сделай копию data/registry.json, затем PATCH http://localhost:3001/api/plots/<id> —",
+    "restrictionsCheckedAt — сегодняшняя дата; checks.restrictions: yes — зон нет или только ограничения (вода, сети, дороги); unknown — ООПТ, объект культурного наследия, санзона, лесничество краем; no — участок в основном в лесничестве;",
+    "в notes добавь строку «Ограничения по карте НСПД, <дата> (проверил Claude — подтвердите): …» с найденными зонами и их номерами.",
+    `Фразу «${FOREST_EDGE_NOTE}» пиши, только если пересечение с лесничеством видно точно — по ней в запрос в администрацию попадает вопрос о границах.`,
+    "Если интерфейс НСПД сбоит — пропусти участок и в конце скажи, какие остались непроверенными.",
+  ].join("\n");
+}
+
 // Участки района, прошедшие НСПД, Росреестр, торги и проверку ограничений и не исключённые
 function requestCandidates(plots: Plot[], settings: Settings) {
   return plots.filter((p) => {
@@ -2731,6 +2757,16 @@ function AdminRequest({
 
 function PlotsView({ data, onEdit, onChanged }: { data: Data; onEdit: (plot: Plot | null) => void; onChanged: () => void }) {
   const [requestFor, setRequestFor] = useState<string | null>(null);
+  // Район, для которого только что скопировано задание для Claude
+  const [taskCopied, setTaskCopied] = useState<string | null>(null);
+
+  async function copyClaudeTask(district: string, plots: Plot[]) {
+    try {
+      await navigator.clipboard.writeText(claudeRestrictionsTask(district, plots));
+      setTaskCopied(district);
+      setTimeout(() => setTaskCopied((d) => (d === district ? null : d)), 4000);
+    } catch {}
+  }
   const [status, setStatus] = useState<PlotStatus | "all">("all");
   const [place, setPlaceState] = useState<Place>({ region: null, district: null });
   // Выбранный регион и район запоминаем в браузере: после перезагрузки страницы не надо искать район заново
@@ -2851,6 +2887,7 @@ function PlotsView({ data, onEdit, onChanged }: { data: Data; onEdit: (plot: Plo
                 const excluded = list.filter((p) => assessments.get(p.id)!.kind === "excluded").length;
                 const all = data.plots.filter((p) => regionOf(p) === region && districtOf(p) === district);
                 const ready = requestCandidates(all, data.settings).length;
+                const toCheck = restrictionsToCheck(all, data.settings);
                 return (
                   <details key={district} open className="group">
                     <summary className="flex cursor-pointer list-none flex-wrap items-baseline gap-x-3 border-b border-zinc-200 pb-1 dark:border-zinc-800">
@@ -2861,18 +2898,35 @@ function PlotsView({ data, onEdit, onChanged }: { data: Data; onEdit: (plot: Plo
                         {area > 0 && ` · ${area.toLocaleString("ru-RU", { maximumFractionDigits: 1 })} га`}
                         {excluded > 0 && ` · исключено: ${excluded}`}
                       </span>
-                      {ready > 0 && (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.preventDefault();
-                            setRequestFor(`${region}|${district}`);
-                          }}
-                          className="ml-auto rounded-full bg-violet-100 px-2 py-0.5 text-xs text-violet-800 hover:bg-violet-200 dark:bg-violet-950 dark:text-violet-300"
-                        >
-                          ✉ Запрос в администрацию · {ready}
-                        </button>
-                      )}
+                      <span className="ml-auto flex flex-wrap gap-2">
+                        {toCheck.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              copyClaudeTask(district, toCheck);
+                            }}
+                            title="Скопировать задание: Claude проверит ограничения этих участков по карте НСПД и запишет найденное в карточки. Вставьте задание в окно Claude."
+                            className="rounded-full bg-sky-100 px-2 py-0.5 text-xs text-sky-800 hover:bg-sky-200 dark:bg-sky-950 dark:text-sky-300"
+                          >
+                            {taskCopied === district
+                              ? "✓ задание скопировано — вставьте в окно Claude"
+                              : `⚙ Ограничения — задание для Claude · ${toCheck.length}`}
+                          </button>
+                        )}
+                        {ready > 0 && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              setRequestFor(`${region}|${district}`);
+                            }}
+                            className="rounded-full bg-violet-100 px-2 py-0.5 text-xs text-violet-800 hover:bg-violet-200 dark:bg-violet-950 dark:text-violet-300"
+                          >
+                            ✉ Запрос в администрацию · {ready}
+                          </button>
+                        )}
+                      </span>
                     </summary>
                     <ul className="mt-2 flex flex-col gap-2">
                       {list.map((p) => (
