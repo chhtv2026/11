@@ -2541,7 +2541,7 @@ function downloadDoc(text: string, fileName: string, headerLines: number) {
 }
 
 // Сколько участков отдавать Claude за один раз: проверка одного занимает 10–15 минут
-const CLAUDE_TASK_BATCH = 3;
+const CLAUDE_TASK_BATCH = 5;
 
 // Участки района без проверки ограничений (и не исключённые) — их можно поручить Claude.
 // Сначала самые перспективные (по оценке), затем ещё не оценённые
