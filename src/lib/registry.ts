@@ -104,11 +104,20 @@ export function emptyChecks(): Record<StopFactor, CheckValue> {
 
 // Итоговое значение стоп-фактора. ВРИ оценивается по классификатору: «не подходит» исключает участок,
 // что бы ни стояло вручную; «подходит» ставит «да», пока вручную ничего не выбрано.
-export function checkValue(plot: Pick<Plot, "checks" | "permittedUse">, key: StopFactor, vri: VriOverrides = {}): CheckValue {
+// Подъезд: если при осмотре по карте видна дорога или грунтовка, а вручную ничего не выбрано — «да».
+// «Подъезда не видно» участок не исключает: проезд можно получить сервитутом — остаётся «не проверено».
+export function checkValue(
+  plot: Pick<Plot, "checks" | "permittedUse"> & { survey?: Pick<Survey, "access"> },
+  key: StopFactor,
+  vri: VriOverrides = {},
+): CheckValue {
   if (key === "permittedUse") {
     const use = classifyUse(plot.permittedUse, vri);
     if (use?.verdict === "no") return "no";
     if (use?.verdict === "ok" && plot.checks[key] === "unknown") return "yes";
+  }
+  if (key === "access" && plot.checks.access === "unknown" && (plot.survey?.access === "road" || plot.survey?.access === "track")) {
+    return "yes";
   }
   return plot.checks[key];
 }
@@ -118,7 +127,11 @@ export type Assessment =
   | { kind: "incomplete"; rated: number }
   | { kind: "scored"; score: number; checksDone: boolean };
 
-export function assess(plot: Pick<Plot, "checks" | "scores" | "permittedUse">, weights: Weights, vri: VriOverrides = {}): Assessment {
+export function assess(
+  plot: Pick<Plot, "checks" | "scores" | "permittedUse"> & { survey?: Pick<Survey, "access"> },
+  weights: Weights,
+  vri: VriOverrides = {},
+): Assessment {
   const reasons = (Object.keys(stopFactors) as StopFactor[]).filter((k) => checkValue(plot, k, vri) === "no");
   if (reasons.length) return { kind: "excluded", reasons };
   const keys = Object.keys(criteria) as Criterion[];
@@ -170,7 +183,7 @@ export function checkProgress(
     | "restrictionsCheckedAt"
     | "adminRequestAt"
     | "planResult"
-  >,
+  > & { survey?: Pick<Survey, "access"> },
   vri: VriOverrides = {},
 ): CheckProgress {
   const nspd = Boolean(plot.nspdCheckedAt);
