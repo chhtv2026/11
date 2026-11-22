@@ -1335,7 +1335,9 @@ function RestrictionsCheck({ form, onApply }: { form: PlotInput; onApply: (patch
     onApply({
       restrictionsCheckedAt: day,
       checks: { ...form.checks, restrictions: value },
-      notes: [form.notes.trim(), `Ограничения по карте НСПД, ${formatDay(day)}: ${[...lines, ...extra].join(" ")}`].filter(Boolean).join("\n"),
+      notes: form.notes.includes(`${formatDay(day)}: ${[...lines, ...extra].join(" ")}`)
+        ? form.notes
+        : [form.notes.trim(), `Ограничения по карте НСПД, ${formatDay(day)}: ${[...lines, ...extra].join(" ")}`].filter(Boolean).join("\n"),
     });
     setMessage(
       value === "no"
@@ -2149,7 +2151,12 @@ function ProgressLine({ progress }: { progress: CheckProgress }) {
       {progress.nspd && <span className="text-emerald-700 dark:text-emerald-400">✓ НСПД</span>}
       {progress.rights && <span className="text-emerald-700 dark:text-emerald-400">✓ Росреестр</span>}
       {progress.torgi && <span className="text-emerald-700 dark:text-emerald-400">✓ торги</span>}
-      {progress.restrictions && <span className="text-emerald-700 dark:text-emerald-400">✓ ограничения</span>}
+      {progress.restrictions && !progress.zoneOpen && <span className="text-emerald-700 dark:text-emerald-400">✓ ограничения</span>}
+      {progress.zoneOpen && progress.next !== "ограничения — уточнить режим зоны" && (
+        <span className="rounded-full bg-amber-100 px-2 font-medium text-amber-900 ring-1 ring-amber-400 dark:bg-amber-950 dark:text-amber-200 dark:ring-amber-700">
+          ⚠ ограничения: уточнить режим зоны
+        </span>
+      )}
       {progress.request && <span className="text-violet-700 dark:text-violet-400">✉ запрос {shortDay(progress.request)}</span>}
       {progress.next &&
         (progress.warn ? (

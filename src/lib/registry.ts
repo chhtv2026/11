@@ -147,6 +147,8 @@ export type CheckProgress = {
   warn?: boolean;
   // Дата отправки запроса в администрацию
   request: string | null;
+  // Зоны на карте сверены, но режим зоны (ООПТ, лесничество краем и т. п.) не выяснен — видно в любой момент проверки
+  zoneOpen: boolean;
 };
 
 // Где участок в проверке и что делать дальше; у исключённого следующего шага нет
@@ -162,7 +164,8 @@ export function checkProgress(
   const torgi = Boolean(plot.torgiCheckedAt);
   const restrictions = Boolean(plot.restrictionsCheckedAt);
   const request = plot.adminRequestAt ?? null;
-  const done = (next: string | null) => ({ nspd, rights, torgi, restrictions, next, request });
+  const zoneOpen = restrictions && checkValue(plot, "restrictions", vri) === "unknown";
+  const done = (next: string | null) => ({ nspd, rights, torgi, restrictions, next, request, zoneOpen });
   if ((Object.keys(stopFactors) as StopFactor[]).some((k) => checkValue(plot, k, vri) === "no")) return done(null);
   if (!nspd) return done("сверить с карточкой НСПД");
   const step = checkSteps.find((s) => checkValue(plot, s.factor, vri) === "unknown");
