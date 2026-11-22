@@ -72,7 +72,14 @@ export type TorgiExportInfo = { date: string; districtCodes: string[]; numbers: 
 // Сколько дней полная выгрузка торгов считается свежей для отметки новых участков
 export const TORGI_EXPORT_FRESH_DAYS = 30;
 
-export type Settings = { weights: Weights; vri: VriOverrides; torgiExport: TorgiExportInfo | null };
+// torgiExcluded — участки, отсеянные по выгрузке торгов (аукцион идёт, победитель, одна заявка): номер → дата лота.
+// В реестр их не заносим и при импорте НСПД пропускаем.
+export type Settings = {
+  weights: Weights;
+  vri: VriOverrides;
+  torgiExport: TorgiExportInfo | null;
+  torgiExcluded: Record<string, string>;
+};
 
 export function emptyChecks(): Record<StopFactor, CheckValue> {
   return { category: "unknown", rights: "unknown", route: "unknown", restrictions: "unknown", access: "unknown", permittedUse: "unknown" };

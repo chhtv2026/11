@@ -1303,7 +1303,14 @@ function ImportForm({
   const [sourceName, setSourceName] = useState(() => `НСПД, выгрузка от ${formatDay(today())}`);
   const [owner, setOwner] = useState<keyof typeof owners>("unknown");
   const [error, setError] = useState("");
-  const [result, setResult] = useState<{ created: number; skipped: string[]; updated: number; absentMarked: number } | null>(null);
+  const [result, setResult] = useState<{
+    created: number;
+    skipped: string[];
+    updated: number;
+    absentMarked: number;
+    excluded: number;
+    excludedBefore: number;
+  } | null>(null);
   // Выгрузка со всеми торгами по сельхозземле (без фильтров ВРИ и статуса): отсутствие участка в ней — значит, торгов не было
   const [complete, setComplete] = useState(false);
   // Выгрузка реестра лотов torgi.gov.ru: номера вместе со сведениями о последнем лоте
@@ -1378,6 +1385,16 @@ function ImportForm({
                 Уже известным участкам обновлены сведения о торгах: <b>{result.updated}</b>.
               </li>
             )}
+            {result.excluded > 0 && (
+              <li className="text-rose-700 dark:text-rose-400">
+                Отсеяно по торгам (аукцион идёт, победитель, одна заявка) — в реестр не занесены: <b>{result.excluded}</b>.
+              </li>
+            )}
+            {result.excludedBefore > 0 && (
+              <li className="text-rose-700 dark:text-rose-400">
+                Пропущено — раньше отсеяны по торгам: <b>{result.excludedBefore}</b>.
+              </li>
+            )}
             {result.absentMarked > 0 && (
               <li className="text-emerald-700 dark:text-emerald-400">
                 ✓ торги отмечены участкам без лотов в выгрузке: <b>{result.absentMarked}</b>.
@@ -1447,14 +1464,14 @@ function ImportForm({
                   .map((k) => (
                     <li key={k} className={torgiExcludes.includes(k) ? "text-rose-700 dark:text-rose-400" : ""}>
                       {lotOutcomes[k]}: <b>{torgi.outcomes[k]}</b>
-                      {torgiExcludes.includes(k) && " — в исключённые"}
+                      {torgiExcludes.includes(k) && " — в реестр не попадут"}
                     </li>
                   ))}
               </ul>
               {torgi.allStatuses ? (
                 <p className="text-emerald-700 dark:text-emerald-400">
                   Выгрузка со всеми статусами: участкам без претендентов поставится «✓ торги проверены» на сегодня, уже
-                  известным участкам — тоже; занятые исключатся.
+                  известным участкам — тоже. Занятые в реестр не заносятся, уже известные занятые уберутся из него.
                 </p>
               ) : (
                 <p className="text-amber-700 dark:text-amber-400">

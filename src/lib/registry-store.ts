@@ -68,6 +68,7 @@ function normalize(data: Partial<Data>): Data {
       weights: { ...defaultWeights, ...data.settings?.weights },
       vri: data.settings?.vri ?? {},
       torgiExport: data.settings?.torgiExport ?? null,
+      torgiExcluded: data.settings?.torgiExcluded ?? {},
     },
   };
 }
@@ -316,7 +317,16 @@ export function updatePlot(id: string, input: Partial<PlotInput>) {
   });
 }
 
-export type ImportResult = { created: number; skipped: string[]; updated: number; absentMarked: number; sourceId: string };
+// excluded — отсеяно по торгам и в реестр не попало (в том числе убранные из реестра); excludedBefore — номера НСПД, отсеянные раньше
+export type ImportResult = {
+  created: number;
+  skipped: string[];
+  updated: number;
+  absentMarked: number;
+  excluded: number;
+  excludedBefore: number;
+  sourceId: string;
+};
 
 // Участок из выгрузки торгов: номер плюс то, что о нём известно из лота
 // exclude — у участка есть претендент или идёт аукцион; torgiCheckedAt — по выгрузке видно, что торгов нет
@@ -407,8 +417,40 @@ export function importPlots(input: {
     const skipped: string[] = [];
     let created = 0;
     let updated = 0;
+    let excluded = 0;
+    let excludedBefore = 0;
+    const torgiExcluded = data.settings.torgiExcluded;
     const listNote = `Добавлен списком из ${fromTorgi ? "выгрузки torgi.gov.ru" : "НСПД"}. Откройте карточку участка в НСПД и вставьте её текст — поля заполнятся.`;
     for (const [number, item] of items) {
+      if (fromTorgi) {
+        const stored = torgiExcluded[number];
+        if (item.exclude) {
+          // Участок занят по торгам — в реестр не заносим, уже известный убираем (если лот не старее учтённого)
+          const plot = data.plots.find((p) => normalizeCadastralNumber(p.cadastralNumber) === number);
+          if (plot && item.lotDate && plot.torgiLotDate && item.lotDate < plot.torgiLotDate) {
+            skipped.push(number);
+            continue;
+          }
+          if (stored === undefined || !item.lotDate || item.lotDate >= stored) torgiExcluded[number] = item.lotDate ?? stored ?? "";
+          if (plot) {
+            data.plots = data.plots.filter((p) => p !== plot);
+            known.delete(number);
+          }
+          excluded++;
+          continue;
+        }
+        // Свежий лот без претендента — участок снова может быть свободен
+        if (stored !== undefined) {
+          if (!item.lotDate || item.lotDate < stored) {
+            excluded++;
+            continue;
+          }
+          delete torgiExcluded[number];
+        }
+      } else if (torgiExcluded[number] !== undefined && !known.has(number)) {
+        excludedBefore++;
+        continue;
+      }
       if (known.has(number)) {
         skipped.push(number);
         // Уже известному участку дописываем сведения о торгах, если такой записи ещё нет
@@ -432,12 +474,7 @@ export function importPlots(input: {
           plot.torgiLotDate = item.lotDate;
           changed = true;
         }
-        // Свежий лот говорит, что участок занят, — исключаем и уже известный
-        if (item.exclude && plot.checks.rights !== "no") {
-          plot.checks = { ...plot.checks, rights: "no" };
-          changed = true;
-        }
-        if (item.torgiCheckedAt && !item.exclude && plot.torgiCheckedAt !== item.torgiCheckedAt) {
+        if (item.torgiCheckedAt && plot.torgiCheckedAt !== item.torgiCheckedAt) {
           plot.torgiCheckedAt = item.torgiCheckedAt;
           changed = true;
         }
@@ -454,9 +491,8 @@ export function importPlots(input: {
         district: districts.get(number.slice(0, 5)) ?? districtByCadastralNumber(number) ?? "",
         owner: item.owner ?? owner,
         areaHa: item.areaHa ?? null,
-        // Единственная заявка на последних торгах — у участка есть арендатор, сразу в исключённые
-        checks: item.exclude ? { ...emptyChecks(), rights: "no" } : emptyChecks(),
-        torgiCheckedAt: item.exclude ? null : (item.torgiCheckedAt ?? null),
+        checks: emptyChecks(),
+        torgiCheckedAt: item.torgiCheckedAt ?? null,
         torgiLotDate: item.lotDate ?? null,
         sourceId: source.id,
         notes: [listNote, item.note].filter(Boolean).join("\n"),
@@ -496,7 +532,7 @@ export function importPlots(input: {
         absentMarked++;
       }
     }
-    return { created, skipped, updated, absentMarked, sourceId: source.id };
+    return { created, skipped, updated, absentMarked, excluded, excludedBefore, sourceId: source.id };
   });
 }
 
