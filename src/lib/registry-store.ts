@@ -69,6 +69,7 @@ function normalize(data: Partial<Data>): Data {
       vri: data.settings?.vri ?? {},
       torgiExport: data.settings?.torgiExport ?? null,
       torgiExcluded: data.settings?.torgiExcluded ?? {},
+      imports: data.settings?.imports ?? [],
     },
   };
 }
@@ -531,6 +532,17 @@ export function importPlots(input: {
         plot.updatedAt = now;
         absentMarked++;
       }
+    }
+    if (items.size) {
+      const codes = new Set([...items.keys()].map((n) => n.slice(0, 5)));
+      if (fromTorgi) for (const code of absentCodes) codes.add(code);
+      data.settings.imports.push({
+        kind: fromTorgi ? "torgi" : "nspd",
+        date: now.slice(0, 10),
+        districtCodes: [...codes].sort(),
+        numbers: items.size,
+        ...(fromTorgi && absent ? { complete: true } : {}),
+      });
     }
     return { created, skipped, updated, absentMarked, excluded, excludedBefore, sourceId: source.id };
   });

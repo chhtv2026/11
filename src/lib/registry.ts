@@ -72,6 +72,10 @@ export type TorgiExportInfo = { date: string; districtCodes: string[]; numbers: 
 // Сколько дней полная выгрузка торгов считается свежей для отметки новых участков
 export const TORGI_EXPORT_FRESH_DAYS = 30;
 
+// Журнал импортов: когда и по каким кадастровым районам (60:03 …) загружали выгрузку НСПД или торгов.
+// complete — выгрузка торгов без фильтров ВРИ и статуса: охватывает весь регион, а не только районы с лотами.
+export type ImportRecord = { kind: "nspd" | "torgi"; date: string; districtCodes: string[]; numbers: number; complete?: boolean };
+
 // torgiExcluded — участки, отсеянные по выгрузке торгов (аукцион идёт, победитель, одна заявка): номер → дата лота.
 // В реестр их не заносим и при импорте НСПД пропускаем.
 export type Settings = {
@@ -79,6 +83,7 @@ export type Settings = {
   vri: VriOverrides;
   torgiExport: TorgiExportInfo | null;
   torgiExcluded: Record<string, string>;
+  imports: ImportRecord[];
 };
 
 export function emptyChecks(): Record<StopFactor, CheckValue> {

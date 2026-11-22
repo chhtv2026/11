@@ -37,6 +37,7 @@ import {
   type PlotInput,
   type PlotStatus,
   type Settings,
+  type ImportRecord,
   type TorgiExportInfo,
   TORGI_EXPORT_FRESH_DAYS,
   type Source,
@@ -1240,6 +1241,26 @@ function TorgiCheck({ form, onApply }: { form: PlotInput; onApply: (patch: Parti
 
 // Читает текст первого файла из ZIP (выгрузка НСПД приходит архивом с одним CSV)
 // При импорте из НСПД: новые участки районов последней полной выгрузки торгов без лотов получат «✓ торги»
+// Предупреждение: по этим районам такая выгрузка уже загружалась
+function RepeatImportHint({ imports, kind, numbers }: { imports: ImportRecord[]; kind: ImportRecord["kind"]; numbers: string[] }) {
+  const codes = [...new Set(numbers.map((n) => n.slice(0, 5)))];
+  // Торги выгружаются сразу по всему региону — достаточно даты последней выгрузки
+  const lastTorgi = imports.filter((r) => r.kind === "torgi").map((r) => r.date).sort().at(-1);
+  const done = kind === "torgi" ? (numbers.length && lastTorgi ? [`последняя — ${formatDay(lastTorgi)}`] : []) : codes.flatMap((code) => {
+    const dates = imports.filter((r) => r.kind === kind && r.districtCodes.includes(code)).map((r) => r.date);
+    if (!dates.length) return [];
+    const last = dates.sort().at(-1)!;
+    return [`${districtByCadastralNumber(code + ":0000000:1") ?? code} — ${formatDay(last)}`];
+  });
+  if (!done.length) return null;
+  return (
+    <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+      Выгрузка {kind === "torgi" ? "торгов" : "НСПД"} уже загружалась: {done.join("; ")}. Повторная добавит только новые номера
+      {kind === "torgi" ? " и обновит сведения о торгах" : ""}.
+    </p>
+  );
+}
+
 function TorgiExportHint({ info, numbers }: { info: TorgiExportInfo; numbers: string[] }) {
   const age = Math.floor((Date.now() - new Date(`${info.date}T00:00:00`).getTime()) / 86_400_000);
   const codes = new Set(info.districtCodes);
@@ -1526,6 +1547,7 @@ function ImportForm({
           {!torgi && settings.torgiExport && (
             <TorgiExportHint info={settings.torgiExport} numbers={fresh} />
           )}
+          <RepeatImportHint imports={settings.imports} kind={torgi ? "torgi" : "nspd"} numbers={numbers} />
           <p className="text-sm">
             Найдено номеров: <b>{numbers.length}</b>
             {numbers.length > 0 && (
@@ -1994,7 +2016,54 @@ function PlotCard({
 }
 
 // Дерево «регион → районы» со счётчиками; выбор сужает список
-function RegionTree({ plots, place, onChange }: { plots: Plot[]; place: Place; onChange: (p: Place) => void }) {
+// Последние выгрузки по кадастровому району: «НСПД 22.11», «торги 22.11» — чтобы не загружать район повторно
+function importMarks(plots: Plot[], imports: ImportRecord[]) {
+  const latest = (kind: ImportRecord["kind"], code: string) =>
+    imports
+      .filter((r) => r.kind === kind && (r.districtCodes.includes(code) || (r.complete && r.districtCodes.some((c) => c.slice(0, 2) === code.slice(0, 2)))))
+      .reduce<string | null>((max, r) => (max && max > r.date ? max : r.date), null);
+  // Район в дереве → его кадастровые коды (у района обычно один)
+  const codes = new Map<string, Set<string>>();
+  for (const p of plots) {
+    const key = `${regionOf(p)}|${districtOf(p)}`;
+    const set = codes.get(key) ?? new Set<string>();
+    if (/^\d{2}:\d{2}:/.test(p.cadastralNumber)) set.add(p.cadastralNumber.slice(0, 5));
+    codes.set(key, set);
+  }
+  const pick = (kind: ImportRecord["kind"], set: Set<string>) =>
+    [...set].map((c) => latest(kind, c)).reduce<string | null>((max, d) => (d && (!max || d > max) ? d : max), null);
+  return new Map([...codes].map(([key, set]) => [key, { nspd: pick("nspd", set), torgi: pick("torgi", set) }]));
+}
+
+const shortDay = (date: string) => date.slice(8, 10) + "." + date.slice(5, 7);
+
+function ImportMarks({ marks }: { marks?: { nspd: string | null; torgi: string | null } }) {
+  if (!marks) return null;
+  const mark = (label: string, date: string | null) => (
+    <span className={date ? "" : "opacity-60"} title={date ? `Выгрузка ${label} загружена ${formatDay(date)}` : `Выгрузки ${label} не было`}>
+      {date ? `✓ ${label} ${shortDay(date)}` : `${label} —`}
+    </span>
+  );
+  return (
+    <span className="flex gap-2 text-[11px] opacity-70">
+      {mark("НСПД", marks.nspd)}
+      {mark("торги", marks.torgi)}
+    </span>
+  );
+}
+
+function RegionTree({
+  plots,
+  imports,
+  place,
+  onChange,
+}: {
+  plots: Plot[];
+  imports: ImportRecord[];
+  place: Place;
+  onChange: (p: Place) => void;
+}) {
+  const marks = useMemo(() => importMarks(plots, imports), [plots, imports]);
   const tree = useMemo(() => {
     const regions = new Map<string, Map<string, number>>();
     for (const p of plots) {
@@ -2055,7 +2124,10 @@ function RegionTree({ plots, place, onChange }: { plots: Plot[]; place: Place; o
                 onClick={() => onChange({ region: r.region, district: d })}
                 className={`${item(place.region === r.region && place.district === d)} pl-5`}
               >
-                <span>{d}</span>
+                <span className="flex flex-col">
+                  <span>{d}</span>
+                  <ImportMarks marks={marks.get(`${r.region}|${d}`)} />
+                </span>
                 <span className="text-xs opacity-70">{n}</span>
               </button>
             ))}
@@ -2133,7 +2205,7 @@ function PlotsView({ data, onEdit }: { data: Data; onEdit: (plot: Plot | null) =
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
       <aside className="lg:sticky lg:top-4 lg:self-start">
-        <RegionTree plots={data.plots} place={place} onChange={setPlace} />
+        <RegionTree plots={data.plots} imports={data.settings.imports} place={place} onChange={setPlace} />
       </aside>
       <div>
       <div className="mb-4 flex flex-wrap items-center gap-2">
