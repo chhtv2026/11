@@ -6,7 +6,9 @@ import {
   criteria,
   defaultWeights,
   TORGI_EXPORT_FRESH_DAYS,
+  emptyApplicant,
   emptyChecks,
+  type Applicant,
   emptyPlot,
   emptyRoute,
   obligationKinds,
@@ -57,6 +59,7 @@ function normalize(data: Partial<Data>): Data {
       rightsCheckedAt: p.rightsCheckedAt ?? null,
       torgiCheckedAt: p.torgiCheckedAt ?? null,
       torgiLotDate: p.torgiLotDate ?? null,
+      adminRequestAt: p.adminRequestAt ?? null,
       checks: { ...emptyChecks(), ...p.checks },
       scores: p.scores ?? {},
       economics: { ...emptyEconomics(), ...p.economics },
@@ -70,6 +73,7 @@ function normalize(data: Partial<Data>): Data {
       torgiExport: data.settings?.torgiExport ?? null,
       torgiExcluded: data.settings?.torgiExcluded ?? {},
       imports: data.settings?.imports ?? [],
+      applicant: { ...emptyApplicant, ...data.settings?.applicant },
     },
   };
 }
@@ -227,7 +231,7 @@ function cleanObligations(obligations: Partial<Obligation>[] | undefined): Oblig
 // Сложные поля проверяются отдельно; undefined — поле не прислали, оставляем как было
 function cleanPlotInput(input: Partial<PlotInput>) {
   const fields: Partial<PlotInput> = pick(emptyPlot(), input);
-  for (const key of ["nspdCheckedAt", "rightsCheckedAt", "torgiCheckedAt", "torgiLotDate"] as const) {
+  for (const key of ["nspdCheckedAt", "rightsCheckedAt", "torgiCheckedAt", "torgiLotDate", "adminRequestAt"] as const) {
     if (fields[key] !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(String(fields[key]))) fields[key] = null;
   }
   if (fields.cadastralValue !== undefined) {
@@ -545,6 +549,16 @@ export function importPlots(input: {
       });
     }
     return { created, skipped, updated, absentMarked, excluded, excludedBefore, sourceId: source.id };
+  });
+}
+
+export function updateApplicant(input: unknown) {
+  return mutate((data) => {
+    const value = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
+    for (const key of Object.keys(emptyApplicant) as (keyof Applicant)[]) {
+      if (typeof value[key] === "string") data.settings.applicant[key] = (value[key] as string).slice(0, 500);
+    }
+    return data.settings;
   });
 }
 

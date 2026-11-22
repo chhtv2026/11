@@ -84,7 +84,15 @@ export type Settings = {
   torgiExport: TorgiExportInfo | null;
   torgiExcluded: Record<string, string>;
   imports: ImportRecord[];
+  applicant: Applicant;
 };
+
+// Заявитель — для запросов в администрацию
+export type Applicant = { name: string; status: string; address: string; phone: string; email: string };
+export const emptyApplicant: Applicant = { name: "", status: "", address: "", phone: "", email: "" };
+
+// Срок ответа на обращение — 30 дней (ст. 12 59-ФЗ)
+export const ADMIN_ANSWER_DAYS = 30;
 
 export function emptyChecks(): Record<StopFactor, CheckValue> {
   return { category: "unknown", rights: "unknown", route: "unknown", restrictions: "unknown", access: "unknown", permittedUse: "unknown" };
@@ -130,17 +138,26 @@ const checkSteps: { factor: StopFactor; label: string }[] = [
 ];
 
 // warn — следующий шаг требует внимания (например, риск по свежей регистрации собственности)
-export type CheckProgress = { nspd: boolean; rights: boolean; torgi: boolean; next: string | null; warn?: boolean };
+export type CheckProgress = {
+  nspd: boolean;
+  rights: boolean;
+  torgi: boolean;
+  next: string | null;
+  warn?: boolean;
+  // Дата отправки запроса в администрацию
+  request: string | null;
+};
 
 // Где участок в проверке и что делать дальше; у исключённого следующего шага нет
 export function checkProgress(
-  plot: Pick<Plot, "checks" | "scores" | "permittedUse" | "nspdCheckedAt" | "rightsCheckedAt" | "torgiCheckedAt">,
+  plot: Pick<Plot, "checks" | "scores" | "permittedUse" | "nspdCheckedAt" | "rightsCheckedAt" | "torgiCheckedAt" | "adminRequestAt">,
   vri: VriOverrides = {},
 ): CheckProgress {
   const nspd = Boolean(plot.nspdCheckedAt);
   const rights = Boolean(plot.rightsCheckedAt);
   const torgi = Boolean(plot.torgiCheckedAt);
-  const done = (next: string | null) => ({ nspd, rights, torgi, next });
+  const request = plot.adminRequestAt ?? null;
+  const done = (next: string | null) => ({ nspd, rights, torgi, next, request });
   if ((Object.keys(stopFactors) as StopFactor[]).some((k) => checkValue(plot, k, vri) === "no")) return done(null);
   if (!nspd) return done("сверить с карточкой НСПД");
   const step = checkSteps.find((s) => checkValue(plot, s.factor, vri) === "unknown");
@@ -148,7 +165,10 @@ export function checkProgress(
   // Права третьих лиц: после Росреестра — торги и извещения, их видно только на torgi.gov.ru
   if (!torgi) return done("права третьих лиц — проверить torgi.gov.ru");
   // Карточка Росреестра вставлена, но вопрос остался (свежая регистрация собственности) — нужен ответ администрации
-  if (step?.factor === "rights" && rights) return { ...done("права третьих лиц — уточнить в администрации"), warn: true };
+  if (step?.factor === "rights" && rights) {
+    if (request) return done(`права третьих лиц — ждём ответ администрации (до ${addDays(request, ADMIN_ANSWER_DAYS).split("-").reverse().join(".")})`);
+    return { ...done("права третьих лиц — уточнить в администрации"), warn: true };
+  }
   if (step) return done(step.label);
   const rated = (Object.keys(criteria) as Criterion[]).filter((k) => plot.scores[k]).length;
   return done(rated < Object.keys(criteria).length ? "оценить баллами" : null);
@@ -203,6 +223,12 @@ export function addMonths(date: string, months: number) {
   d.setMonth(d.getMonth() + months);
   // 29 февраля или 31-е число: если такого дня нет, берём последний день месяца
   if (d.getDate() !== day) d.setDate(0);
+  return localDate(d);
+}
+
+export function addDays(date: string, days: number) {
+  const d = new Date(`${date}T00:00:00`);
+  d.setDate(d.getDate() + days);
   return localDate(d);
 }
 
@@ -312,6 +338,8 @@ export type Plot = {
   torgiCheckedAt: string | null;
   // Дата начала приёма заявок самого свежего известного лота: более старая выгрузка не перебивает новую
   torgiLotDate: string | null;
+  // Когда по участку отправлен запрос в администрацию (договоры до года, заявления, торги); ответ — 30 дней (59-ФЗ)
+  adminRequestAt: string | null;
   landCategory: string;
   permittedUse: string;
   owner: Owner;
@@ -351,6 +379,7 @@ export function emptyPlot(): PlotInput {
     rightsCheckedAt: null,
     torgiCheckedAt: null,
     torgiLotDate: null,
+    adminRequestAt: null,
     landCategory: "Земли сельскохозяйственного назначения",
     permittedUse: "",
     owner: "unknown",
