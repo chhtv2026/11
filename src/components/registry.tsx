@@ -1468,7 +1468,8 @@ function RestrictionsCheck({
             <p className="mt-1">
               Без обводки: щелчок по карте показывает только зоны в этой точке — щёлкайте в середину каждой группы
               контуров и прямо по видимым полосам (дороги, ЛЭП). Водоохранных зон часто нет на карте, хотя по закону они
-              есть: если рядом река, ручей или озеро — отметьте «Водоохранная зона».
+              есть: если рядом река, ручей или озеро — отметьте «Водоохранная зона». Нарисованные водоохранные зоны и
+              береговые полосы часто есть на карте генплана (блок «Проверить генплан» ниже).
             </p>
           </div>
           <p className="text-xs text-zinc-500">Отметьте всё, что нашлось:</p>
@@ -1513,6 +1514,246 @@ function RestrictionsCheck({
               className="rounded-lg border border-emerald-400 px-3 py-1.5 text-xs text-emerald-800 hover:bg-emerald-50 dark:border-emerald-700 dark:text-emerald-300"
             >
               Ничего не нашлось
+            </button>
+          </div>
+        </>
+      )}
+      {message && <p className={`text-xs ${tone[message.tone]}`}>{message.text}</p>}
+      {message && <SaveHere />}
+    </div>
+  );
+}
+
+// Генплан по карте НСПД: тематическая карта «Минсельхоз России», папка «ФГИС ТП» — функциональные зоны,
+// планируемые автодороги, ЛЭП, трубопроводы, железные дороги, водоохранные зоны и береговые полосы
+// (документы во ФГИС ТП с октября 2026 г. закрыты для гостей, а слои в НСПД открыты)
+const NSPD_PLAN_MAP =
+  "https://nspd.gov.ru/map?thematic=PKK&theme_id=566&baseLayerId=235&active_layers=846615%2C844783%2C846114%2C847068%2C844794%2C844738%2C844885";
+
+const PLAN_NOTE_PREFIX = "Генплан по карте НСПД";
+
+// effect: ok — так и должно быть; check — уточнить; limit — к сведению
+const planFindingsList = [
+  {
+    key: "agri",
+    label: "Функциональная зона сельхозугодий / сельхозназначения",
+    effect: "ok",
+    note: "по генплану — зона сельскохозяйственного назначения (угодий), как и нужно.",
+  },
+  {
+    key: "forest",
+    label: "Зона лесов или рекреационная",
+    effect: "check",
+    note: "по генплану участок (или часть) в зоне лесов / рекреационной — генплан не видит его сельхозугодьем; уточнить у администрации.",
+  },
+  {
+    key: "build",
+    label: "Жилая, производственная, общественная или иная застройка",
+    effect: "check",
+    note: "по генплану участок (или часть) отведён под застройку — возможен перевод земель и изъятие; уточнить у администрации планы на участок.",
+  },
+  {
+    key: "planned",
+    label: "Планируемая дорога, ЛЭП, трубопровод или ж/д по участку",
+    effect: "check",
+    note: "по участку проходит планируемый объект (статус «планируемый») — риск резервирования и изъятия под него; уточнить сроки и трассу.",
+  },
+  {
+    key: "water",
+    label: "Водоохранная зона / береговая полоса (слои ФГИС ТП)",
+    effect: "limit",
+    note: "по слоям ФГИС ТП участок задевает водоохранная зона или береговая полоса — учесть в ограничениях (в прибрежной полосе не пахать и не пасти скот).",
+  },
+  {
+    key: "nodata",
+    label: "Данных генплана на участок нет",
+    effect: "check",
+    note: "функциональных зон генплана на участке в НСПД нет — генплан, видимо, не внесён; спросить у администрации.",
+  },
+] as const;
+type PlanKey = (typeof planFindingsList)[number]["key"];
+
+function PlanCheck({
+  form,
+  onApply,
+  open,
+  setOpen,
+  scrollOnMount,
+}: {
+  form: PlotInput;
+  onApply: (patch: Partial<PlotInput>) => void;
+  open: boolean;
+  setOpen: (open: boolean | ((v: boolean) => boolean)) => void;
+  scrollOnMount: boolean;
+}) {
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (scrollOnMount) box.current?.scrollIntoView({ block: "start" });
+  }, [scrollOnMount]);
+  const keys = new Set<string>(planFindingsList.map((f) => f.key));
+  const [found, setFound] = useState<Set<PlanKey>>(
+    () => new Set((form.planFindings ?? []).filter((k): k is PlanKey => keys.has(k))),
+  );
+  const [comment, setComment] = useState("");
+  const [message, setMessage] = useState<{ tone: "ok" | "warn" | "bad"; text: string } | null>(null);
+  const lines = form.notes.split("\n").filter((l) => l.startsWith(PLAN_NOTE_PREFIX));
+  const byClaude = lines.some((l) => l.includes(CLAUDE_MARK));
+
+  function note(text: string) {
+    const day = today();
+    const line = `${PLAN_NOTE_PREFIX}, ${formatDay(day)}: ${text}`;
+    return form.notes.includes(line) ? form.notes : [form.notes.trim(), line].filter(Boolean).join("\n");
+  }
+
+  function apply() {
+    const items = planFindingsList.filter((f) => found.has(f.key));
+    const result = items.some((f) => f.effect === "check") ? "check" : "ok";
+    const extra = comment.trim() ? [`Уточнение: ${comment.trim()}`] : [];
+    onApply({
+      planCheckedAt: today(),
+      planResult: result,
+      planFindings: items.map((f) => f.key),
+      notes: note([...items.map((f) => f.note), ...extra].join(" ")),
+    });
+    setMessage(
+      result === "check"
+        ? { tone: "warn", text: "Отмечено: по генплану есть что уточнить — в строке участка появится «⚠ генплан». Сохраните участок." }
+        : { tone: "ok", text: "Отмечено: по генплану участок в сельхоззоне. Сохраните участок." },
+    );
+  }
+
+  function reject() {
+    onApply({
+      status: "rejected",
+      planCheckedAt: today(),
+      planResult: "check",
+      planFindings: [...found],
+      notes: note(`участок отклонён: ${comment.trim() || "по генплану под него планируется другой объект"}.`),
+    });
+    setMessage({ tone: "bad", text: "Участок помечен «Отклонён». Сохраните участок." });
+  }
+
+  function confirmClaude(line: string) {
+    onApply({ notes: form.notes.replace(line, line.replace(CLAUDE_MARK, CLAUDE_CONFIRMED)) });
+    setMessage({ tone: "ok", text: "Проверка Claude подтверждена. Сохраните участок." });
+  }
+
+  const tone = { ok: "text-emerald-700 dark:text-emerald-400", warn: "text-amber-700 dark:text-amber-400", bad: "text-rose-600" };
+  const effectClass = { ok: "text-emerald-800 dark:text-emerald-300", check: "text-amber-800 dark:text-amber-300", limit: "" };
+  return (
+    <div ref={box} className="flex flex-col gap-2 rounded-xl border border-dashed border-zinc-300 p-3 text-sm sm:col-span-2 dark:border-zinc-700">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <button type="button" onClick={() => setOpen((v) => !v)} className="font-medium hover:underline">
+          {open ? "▾" : "▸"} Проверить генплан (функциональная зона, планируемые объекты)
+        </button>
+        {form.planCheckedAt && (
+          <span
+            className={`rounded-full px-2 py-0.5 text-xs ${
+              form.planResult === "check"
+                ? "bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-200"
+                : "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
+            }`}
+          >
+            {form.planResult === "check" ? "⚠" : "✓"} генплан просмотрен {formatDay(form.planCheckedAt)}
+          </span>
+        )}
+        {byClaude && (
+          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-200">
+            проверил Claude — подтвердите
+          </span>
+        )}
+        <a
+          href={NSPD_PLAN_MAP}
+          target="_blank"
+          rel="noreferrer"
+          onClick={() => setOpen(true)}
+          className="text-xs text-sky-700 hover:underline dark:text-sky-400"
+        >
+          открыть карту генплана в НСПД ↗
+        </a>
+      </div>
+      {lines.length > 0 && (
+        <div className="flex flex-col gap-1 rounded-lg bg-zinc-50 px-3 py-2 text-xs dark:bg-zinc-900">
+          <p className="font-medium text-zinc-600 dark:text-zinc-400">Записано в заметках:</p>
+          {lines.map((l) => (
+            <p key={l} className={l.includes(CLAUDE_MARK) ? "text-amber-900 dark:text-amber-200" : "text-zinc-700 dark:text-zinc-300"}>
+              {l}
+              {l.includes(CLAUDE_MARK) && (
+                <button
+                  type="button"
+                  onClick={() => confirmClaude(l)}
+                  className="ml-2 rounded border border-emerald-400 px-1.5 text-emerald-800 hover:bg-emerald-50 dark:border-emerald-700 dark:text-emerald-300"
+                >
+                  ✓ подтверждаю
+                </button>
+              )}
+            </p>
+          ))}
+        </div>
+      )}
+      {open && (
+        <>
+          <div className="text-xs text-zinc-500">
+            <p>
+              Карта откроется на тематике «Минсельхоз России» с включёнными слоями ФГИС ТП: функциональные зоны генплана,
+              планируемые автодороги, ЛЭП, трубопроводы и железные дороги, водоохранные зоны и береговые полосы. Сами
+              документы во ФГИС ТП с октября 2026 г. закрыты, а слои в НСПД открыты.
+            </p>
+            <ol className="ml-4 mt-1 list-decimal">
+              <li>Найдите участок по номеру (поиск «Объекты недвижимости»).</li>
+              <li>
+                Щёлкните по участку — в списке будут функциональные зоны генплана в этой точке. У многоконтурных щёлкните
+                по каждой группе контуров.
+              </li>
+              <li>
+                Зоны рисуются только на мелком масштабе (около 2 км) — отдалите карту, чтобы увидеть, не проходит ли
+                рядом планируемая дорога или ЛЭП. В карточке объекта смотрите «Статус объекта»: планируемый или
+                существующий.
+              </li>
+            </ol>
+          </div>
+          <p className="text-xs text-zinc-500">Отметьте всё, что нашлось:</p>
+          <div className="flex flex-col gap-1">
+            {planFindingsList.map((f) => (
+              <label key={f.key} className={`flex items-baseline gap-2 text-xs ${effectClass[f.effect]}`}>
+                <input
+                  type="checkbox"
+                  checked={found.has(f.key)}
+                  onChange={(e) => {
+                    const next = new Set(found);
+                    if (e.target.checked) next.add(f.key);
+                    else next.delete(f.key);
+                    setFound(next);
+                  }}
+                />
+                <span>
+                  {f.label}
+                  {f.effect === "check" ? " — уточнить" : f.effect === "ok" ? " — хорошо" : " — к сведению"}
+                </span>
+              </label>
+            ))}
+          </div>
+          <input
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            placeholder="Уточнение: какая зона, какой объект и где (например: планируемая а/д по северным контурам)"
+            className={`${inputClass} text-xs`}
+          />
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={found.size === 0}
+              onClick={apply}
+              className="rounded-lg bg-zinc-900 px-3 py-1.5 text-xs text-white hover:bg-zinc-700 disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900"
+            >
+              Записать найденное
+            </button>
+            <button
+              type="button"
+              onClick={reject}
+              className="rounded-lg border border-rose-300 px-3 py-1.5 text-xs text-rose-700 hover:bg-rose-50 dark:border-rose-800 dark:text-rose-400"
+            >
+              Отклонить участок: под него планируется другое
             </button>
           </div>
         </>
@@ -1876,7 +2117,7 @@ function ImportForm({
 // хранится в sessionStorage вкладки и открывается снова при возвращении
 // updatedAt — версия участка, с которой начата правка: если участок с тех пор изменили (например, Claude записал
 // проверку), старый снимок формы не подставляем, чтобы не показать и не сохранить устаревшие данные
-type CardDraft = { id: string; form: PlotInput; panel: "restrictions" | null; updatedAt?: string };
+type CardDraft = { id: string; form: PlotInput; panel: "restrictions" | "plan" | null; updatedAt?: string };
 const CARD_DRAFT_KEY = "plots.openCard";
 
 function readCardDraft(): CardDraft | null {
@@ -1918,10 +2159,12 @@ function PlotForm({
   const [form, setForm] = useState<PlotInput>(() => (draft ? { ...draft.form } : plot ? { ...plot } : emptyPlot()));
   const [error, setError] = useState("");
   const [restrictionsOpen, setRestrictionsOpen] = useState(draft?.panel === "restrictions");
+  const [planOpen, setPlanOpen] = useState(draft?.panel === "plan");
   // Запоминаем открытую карточку, пока она открыта; закрытие и сохранение — забывают
   useEffect(() => {
-    if (plot) writeCardDraft({ id: plot.id, form, panel: restrictionsOpen ? "restrictions" : null, updatedAt: plot.updatedAt });
-  }, [plot, form, restrictionsOpen]);
+    const panel = planOpen ? "plan" : restrictionsOpen ? "restrictions" : null;
+    if (plot) writeCardDraft({ id: plot.id, form, panel, updatedAt: plot.updatedAt });
+  }, [plot, form, restrictionsOpen, planOpen]);
   const set = <K extends keyof PlotInput>(key: K, value: PlotInput[K]) => setForm((f) => ({ ...f, [key]: value }));
 
   async function submit(e: React.FormEvent) {
@@ -1993,6 +2236,13 @@ function PlotForm({
           open={restrictionsOpen}
           setOpen={setRestrictionsOpen}
           scrollOnMount={draft?.panel === "restrictions"}
+        />
+        <PlanCheck
+          form={form}
+          onApply={(patch) => setForm((f) => ({ ...f, ...patch }))}
+          open={planOpen}
+          setOpen={setPlanOpen}
+          scrollOnMount={draft?.panel === "plan"}
         />
         <Field label="Кадастровый номер">
           <input
@@ -2286,6 +2536,12 @@ function ProgressLine({ progress }: { progress: CheckProgress }) {
       {progress.zoneOpen && progress.next !== "ограничения — уточнить режим зоны" && (
         <span className="rounded-full bg-amber-100 px-2 font-medium text-amber-900 ring-1 ring-amber-400 dark:bg-amber-950 dark:text-amber-200 dark:ring-amber-700">
           ⚠ ограничения: уточнить режим зоны
+        </span>
+      )}
+      {progress.plan === "ok" && <span className="text-emerald-700 dark:text-emerald-400">✓ генплан</span>}
+      {progress.plan === "check" && (
+        <span className="rounded-full bg-amber-100 px-2 font-medium text-amber-900 ring-1 ring-amber-400 dark:bg-amber-950 dark:text-amber-200 dark:ring-amber-700">
+          ⚠ генплан: уточнить
         </span>
       )}
       {progress.request && <span className="text-violet-700 dark:text-violet-400">✉ запрос {shortDay(progress.request)}</span>}
@@ -2593,14 +2849,44 @@ const CLAUDE_TASK_BATCH = 5;
 
 // Участки района без проверки ограничений (и не исключённые) — их можно поручить Claude.
 // Сначала самые перспективные (по оценке), затем ещё не оценённые
-function restrictionsToCheck(plots: Plot[], settings: Settings) {
+function claudeQueue(plots: Plot[], settings: Settings, pending: (p: Plot) => boolean) {
   const scoreOf = (p: Plot) => {
     const a = assess(p, settings.weights, settings.vri);
     return a.kind === "scored" ? a.score : -1;
   };
   return plots
-    .filter((p) => !p.restrictionsCheckedAt && assess(p, settings.weights, settings.vri).kind !== "excluded")
+    .filter((p) => pending(p) && p.status !== "rejected" && assess(p, settings.weights, settings.vri).kind !== "excluded")
     .sort((a, b) => scoreOf(b) - scoreOf(a));
+}
+
+function restrictionsToCheck(plots: Plot[], settings: Settings) {
+  return claudeQueue(plots, settings, (p) => !p.restrictionsCheckedAt);
+}
+
+// Участки района, по которым ещё не смотрели генплан
+function planToCheck(plots: Plot[], settings: Settings) {
+  return claudeQueue(plots, settings, (p) => !p.planCheckedAt);
+}
+
+// Задание для Claude: посмотреть генплан по слоям ФГИС ТП на карте НСПД и записать в карточки
+function claudePlanTask(district: string, plots: Plot[]) {
+  return [
+    `Посмотри генплан по слоям ФГИС ТП на карте НСПД у участков района «${district}» из реестра «Земля в аренду» — по ним генплан ещё не смотрели:`,
+    ...plots.map((p, i) => `${i + 1}. ${p.cadastralNumber}`),
+    "",
+    "Как смотреть — во встроенном браузере, на карте НСПД; мои данные никуда не вводи, платные сервисы не открывай:",
+    `- карта генплана (тематика «Минсельхоз России», папка «ФГИС ТП»): ${NSPD_PLAN_MAP}`,
+    "- найди участок поиском «Объекты недвижимости» и щёлкни по нему (у многоконтурных — по каждой группе контуров): в списке будут функциональные зоны генплана в этой точке;",
+    "- зоны рисуются только на мелком масштабе (около 2 км) — отдали карту и посмотри, не проходит ли по участку планируемая дорога, ЛЭП, трубопровод или ж/д; у объектов смотри «Статус объекта» (планируемый или существующий);",
+    "- отметь, задевают ли участок водоохранные зоны и береговые полосы этих слоёв.",
+    "",
+    "Как записывать: сначала сделай копию data/registry.json, затем PATCH http://localhost:3001/api/plots/<id> —",
+    "planCheckedAt — сегодняшняя дата; planResult: ok — только зона сельхозугодий / сельхозназначения (и, может быть, вода); check — всё остальное (зона лесов, застройка, планируемый объект, нет данных);",
+    `planFindings — что нашлось: ${planFindingsList.map((f) => `${f.key} (${f.label})`).join(", ")};`,
+    `в notes добавь строку «${PLAN_NOTE_PREFIX}, <дата> ${CLAUDE_MARK}: …» — какие зоны и объекты нашлись и где.`,
+    "Участок не отклоняй сам (status не меняй) — это решаю я.",
+    "Если интерфейс НСПД сбоит — пропусти участок и в конце скажи, какие остались непроверенными.",
+  ].join("\n");
 }
 
 // Готовое задание для Claude: проверить ограничения по карте НСПД и записать в карточки
@@ -2819,11 +3105,12 @@ function PlotsView({ data, onEdit, onChanged }: { data: Data; onEdit: (plot: Plo
   // Район, для которого только что скопировано задание для Claude
   const [taskCopied, setTaskCopied] = useState<string | null>(null);
 
-  async function copyClaudeTask(district: string, plots: Plot[]) {
+  // key — район и вид задания, чтобы «скопировано» показывалось на той кнопке, которую нажали
+  async function copyClaudeTask(key: string, text: string) {
     try {
-      await navigator.clipboard.writeText(claudeRestrictionsTask(district, plots));
-      setTaskCopied(district);
-      setTimeout(() => setTaskCopied((d) => (d === district ? null : d)), 4000);
+      await navigator.clipboard.writeText(text);
+      setTaskCopied(key);
+      setTimeout(() => setTaskCopied((d) => (d === key ? null : d)), 4000);
     } catch {}
   }
   const [status, setStatus] = useState<PlotStatus | "all">("all");
@@ -2947,6 +3234,7 @@ function PlotsView({ data, onEdit, onChanged }: { data: Data; onEdit: (plot: Plo
                 const all = data.plots.filter((p) => regionOf(p) === region && districtOf(p) === district);
                 const ready = requestCandidates(all, data.settings).length;
                 const toCheck = restrictionsToCheck(all, data.settings);
+                const planQueue = planToCheck(all, data.settings);
                 return (
                   <details key={district} open className="group">
                     <summary className="flex cursor-pointer list-none flex-wrap items-baseline gap-x-3 border-b border-zinc-200 pb-1 dark:border-zinc-800">
@@ -2963,16 +3251,33 @@ function PlotsView({ data, onEdit, onChanged }: { data: Data; onEdit: (plot: Plo
                             type="button"
                             onClick={(e) => {
                               e.preventDefault();
-                              copyClaudeTask(district, toCheck.slice(0, CLAUDE_TASK_BATCH));
+                              copyClaudeTask(`${district}|restrictions`, claudeRestrictionsTask(district, toCheck.slice(0, CLAUDE_TASK_BATCH)));
                             }}
                             title={`Скопировать задание на ${Math.min(toCheck.length, CLAUDE_TASK_BATCH)} уч. (сначала самые перспективные): Claude проверит ограничения по карте НСПД и запишет найденное в карточки. Проверенные уходят из очереди — следующее нажатие даст следующую группу. Вставьте задание в окно Claude.`}
                             className="rounded-full bg-sky-100 px-2 py-0.5 text-xs text-sky-800 hover:bg-sky-200 dark:bg-sky-950 dark:text-sky-300"
                           >
-                            {taskCopied === district
+                            {taskCopied === `${district}|restrictions`
                               ? "✓ задание скопировано — вставьте в окно Claude"
                               : toCheck.length > CLAUDE_TASK_BATCH
                                 ? `⚙ Ограничения — задание для Claude · ${CLAUDE_TASK_BATCH} из ${toCheck.length}`
                                 : `⚙ Ограничения — задание для Claude · ${toCheck.length}`}
+                          </button>
+                        )}
+                        {planQueue.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              copyClaudeTask(`${district}|plan`, claudePlanTask(district, planQueue.slice(0, CLAUDE_TASK_BATCH)));
+                            }}
+                            title={`Скопировать задание на ${Math.min(planQueue.length, CLAUDE_TASK_BATCH)} уч. (сначала самые перспективные): Claude посмотрит генплан по слоям ФГИС ТП на карте НСПД и запишет найденное в карточки. Вставьте задание в окно Claude.`}
+                            className="rounded-full bg-teal-100 px-2 py-0.5 text-xs text-teal-800 hover:bg-teal-200 dark:bg-teal-950 dark:text-teal-300"
+                          >
+                            {taskCopied === `${district}|plan`
+                              ? "✓ задание скопировано — вставьте в окно Claude"
+                              : planQueue.length > CLAUDE_TASK_BATCH
+                                ? `📐 Генплан — задание для Claude · ${CLAUDE_TASK_BATCH} из ${planQueue.length}`
+                                : `📐 Генплан — задание для Claude · ${planQueue.length}`}
                           </button>
                         )}
                         {ready > 0 && (

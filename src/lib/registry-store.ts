@@ -61,6 +61,9 @@ function normalize(data: Partial<Data>): Data {
       torgiLotDate: p.torgiLotDate ?? null,
       restrictionsCheckedAt: p.restrictionsCheckedAt ?? null,
       restrictionZones: p.restrictionZones ?? [],
+      planCheckedAt: p.planCheckedAt ?? null,
+      planResult: p.planResult ?? "",
+      planFindings: p.planFindings ?? [],
       adminRequestAt: p.adminRequestAt ?? null,
       checks: { ...emptyChecks(), ...p.checks },
       scores: p.scores ?? {},
@@ -233,7 +236,12 @@ function cleanObligations(obligations: Partial<Obligation>[] | undefined): Oblig
 // Сложные поля проверяются отдельно; undefined — поле не прислали, оставляем как было
 function cleanPlotInput(input: Partial<PlotInput>) {
   const fields: Partial<PlotInput> = pick(emptyPlot(), input);
-  for (const key of ["nspdCheckedAt", "rightsCheckedAt", "torgiCheckedAt", "torgiLotDate", "restrictionsCheckedAt", "adminRequestAt"] as const) {
+  if (fields.planResult !== undefined && !["", "ok", "check"].includes(fields.planResult)) fields.planResult = "";
+  if (fields.planFindings !== undefined) {
+    const items = Array.isArray(fields.planFindings) ? fields.planFindings : [];
+    fields.planFindings = [...new Set(items.filter((z) => typeof z === "string" && /^[a-zA-Z]{1,20}$/.test(z)))];
+  }
+  for (const key of ["nspdCheckedAt", "rightsCheckedAt", "torgiCheckedAt", "torgiLotDate", "restrictionsCheckedAt", "planCheckedAt", "adminRequestAt"] as const) {
     if (fields[key] !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(String(fields[key]))) fields[key] = null;
   }
   if (fields.restrictionZones !== undefined) {

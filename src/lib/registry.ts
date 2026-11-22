@@ -24,6 +24,9 @@ export const plotStatuses = {
 } as const;
 export type PlotStatus = keyof typeof plotStatuses;
 
+// Итог проверки генплана: "" — не смотрели, ok — сельхоззона и ничего не планируется, check — есть что уточнить
+export type PlanResult = "" | "ok" | "check";
+
 // Направления поиска из концепции: А — участок уже сформирован, Б — ещё нет
 export const plotDirections = {
   formed: "А. Сформирован (есть кадастровый номер)",
@@ -149,13 +152,23 @@ export type CheckProgress = {
   request: string | null;
   // Зоны на карте сверены, но режим зоны (ООПТ, лесничество краем и т. п.) не выяснен — видно в любой момент проверки
   zoneOpen: boolean;
+  // Генплан смотрят отдельно от очереди проверок: "" — не смотрели
+  plan: PlanResult;
 };
 
 // Где участок в проверке и что делать дальше; у исключённого следующего шага нет
 export function checkProgress(
   plot: Pick<
     Plot,
-    "checks" | "scores" | "permittedUse" | "nspdCheckedAt" | "rightsCheckedAt" | "torgiCheckedAt" | "restrictionsCheckedAt" | "adminRequestAt"
+    | "checks"
+    | "scores"
+    | "permittedUse"
+    | "nspdCheckedAt"
+    | "rightsCheckedAt"
+    | "torgiCheckedAt"
+    | "restrictionsCheckedAt"
+    | "adminRequestAt"
+    | "planResult"
   >,
   vri: VriOverrides = {},
 ): CheckProgress {
@@ -167,7 +180,8 @@ export function checkProgress(
   const excluded = (Object.keys(stopFactors) as StopFactor[]).some((k) => checkValue(plot, k, vri) === "no");
   // У исключённого участка режим зоны выяснять незачем — плашку не показываем
   const zoneOpen = !excluded && restrictions && checkValue(plot, "restrictions", vri) === "unknown";
-  const done = (next: string | null) => ({ nspd, rights, torgi, restrictions, next, request, zoneOpen });
+  const plan = excluded ? "" : (plot.planResult ?? "");
+  const done = (next: string | null) => ({ nspd, rights, torgi, restrictions, next, request, zoneOpen, plan });
   if (excluded) return done(null);
   if (!nspd) return done("сверить с карточкой НСПД");
   const step = checkSteps.find((s) => checkValue(plot, s.factor, vri) === "unknown");
@@ -358,6 +372,11 @@ export type Plot = {
   restrictionsCheckedAt: string | null;
   // Какие зоны отмечены при проверке ограничений (ключи пунктов «Отметьте всё, что нашлось»)
   restrictionZones: string[];
+  // Генплан по слоям ФГИС ТП на карте НСПД (функциональная зона, планируемые объекты): когда смотрели,
+  // итог (ok — сельхоззона, ничего не планируется; check — есть что уточнить) и что нашлось
+  planCheckedAt: string | null;
+  planResult: PlanResult;
+  planFindings: string[];
   // Когда по участку отправлен запрос в администрацию (договоры до года, заявления, торги); ответ — 30 дней (59-ФЗ)
   adminRequestAt: string | null;
   landCategory: string;
@@ -401,6 +420,9 @@ export function emptyPlot(): PlotInput {
     torgiLotDate: null,
     restrictionsCheckedAt: null,
     restrictionZones: [],
+    planCheckedAt: null,
+    planResult: "",
+    planFindings: [],
     adminRequestAt: null,
     landCategory: "Земли сельскохозяйственного назначения",
     permittedUse: "",
