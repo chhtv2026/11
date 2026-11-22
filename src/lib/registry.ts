@@ -1,6 +1,7 @@
 // Типы и справочники реестра. Файл без серверных импортов — его использует и интерфейс.
 import { emptyEconomics, type Economics } from "./economics";
 import { classifyUse, type VriOverrides } from "./vri";
+import { emptySurvey, type Survey } from "./water";
 
 export const sourceTypes = {
   fund: "Фонд перераспределения земель",
@@ -377,6 +378,8 @@ export type Plot = {
   planCheckedAt: string | null;
   planResult: PlanResult;
   planFindings: string[];
+  // Осмотр по карте: вода рядом (для расчёта водоохранных полос), зарастание, подъезд
+  survey: Survey;
   // Когда по участку отправлен запрос в администрацию (договоры до года, заявления, торги); ответ — 30 дней (59-ФЗ)
   adminRequestAt: string | null;
   landCategory: string;
@@ -423,6 +426,7 @@ export function emptyPlot(): PlotInput {
     planCheckedAt: null,
     planResult: "",
     planFindings: [],
+    survey: emptySurvey(),
     adminRequestAt: null,
     landCategory: "Земли сельскохозяйственного назначения",
     permittedUse: "",

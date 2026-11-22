@@ -37,6 +37,26 @@ import { economicsFields, emptyEconomics, type Economics, type EconomicsField } 
 import { normalizeCadastralNumber } from "./nspd";
 import { districtByCadastralNumber, regionByCadastralNumber } from "./regions";
 import { vriClassifier, vriVerdicts, type VriVerdict } from "./vri";
+import { accessKinds, emptySurvey, waterKinds, type Survey, type WaterItem } from "./water";
+
+// Осмотр по карте: только известные виды воды, числа — неотрицательные
+function cleanSurvey(survey: Partial<Survey> | undefined): Survey | undefined {
+  if (!survey || typeof survey !== "object") return undefined;
+  const num = (v: unknown) => {
+    const n = v === null || v === undefined || v === "" ? null : Number(v);
+    return n !== null && Number.isFinite(n) && n >= 0 ? n : null;
+  };
+  const water: WaterItem[] = (Array.isArray(survey.water) ? survey.water : [])
+    .filter((w) => w && w.kind in waterKinds)
+    .slice(0, 20)
+    .map((w) => ({ kind: w.kind, name: String(w.name ?? "").trim().slice(0, 100), distanceM: num(w.distanceM), size: num(w.size) }));
+  return {
+    water,
+    overgrown: Boolean(survey.overgrown),
+    access: survey.access && survey.access in accessKinds ? survey.access : "",
+    note: String(survey.note ?? "").slice(0, 2000),
+  };
+}
 
 type Data = { sources: Source[]; plots: Plot[]; settings: Settings };
 
@@ -64,6 +84,7 @@ function normalize(data: Partial<Data>): Data {
       planCheckedAt: p.planCheckedAt ?? null,
       planResult: p.planResult ?? "",
       planFindings: p.planFindings ?? [],
+      survey: { ...emptySurvey(), ...p.survey },
       adminRequestAt: p.adminRequestAt ?? null,
       checks: { ...emptyChecks(), ...p.checks },
       scores: p.scores ?? {},
@@ -259,6 +280,8 @@ function cleanPlotInput(input: Partial<PlotInput>) {
   const route = cleanRoute(input.route);
   const deadlines = cleanDeadlines(input.deadlines);
   const obligations = cleanObligations(input.obligations);
+  const survey = cleanSurvey(input.survey);
+  delete fields.survey;
   delete fields.obligations;
   delete fields.findings;
   delete fields.checks;
@@ -275,6 +298,7 @@ function cleanPlotInput(input: Partial<PlotInput>) {
     ...(route && { route }),
     ...(deadlines && { deadlines }),
     ...(obligations && { obligations }),
+    ...(survey && { survey }),
   };
 }
 

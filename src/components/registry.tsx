@@ -52,6 +52,18 @@ import { classifyUse, vriClassifier, vriVerdicts, type VriOverrides, type VriVer
 import { districtByCadastralNumber, districtsOfRegion, regionByCadastralNumber } from "@/lib/regions";
 import { extractCadastralNumbers, isAgriculturalLand, normalizeCadastralNumber, parseNspdCard } from "@/lib/nspd";
 import { ROSREESTR_ONLINE, ownershipClaimDeadline, parseRosreestrCard } from "@/lib/rosreestr";
+import {
+  accessKinds,
+  emptySurvey,
+  sizeLabel,
+  waterKinds,
+  waterStrips,
+  waterSummary,
+  type AccessKind,
+  type Survey,
+  type WaterItem,
+  type WaterKind,
+} from "@/lib/water";
 import { TORGI_LOTS, parseTorgiExport, torgiExcludes, torgiOutcomes as lotOutcomes, type TorgiExport, type TorgiOutcome } from "@/lib/torgi";
 
 type Data = { sources: Source[]; plots: Plot[]; settings: Settings };
@@ -1573,6 +1585,154 @@ const planFindingsList = [
 ] as const;
 type PlanKey = (typeof planFindingsList)[number]["key"];
 
+const smallInput =
+  "rounded-md border border-zinc-200 bg-white px-2 py-1 text-xs outline-none focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-900";
+
+// Число с запятой: текст держим у себя, в форму отдаём по уходу из поля — иначе «0,5» не набрать
+function NumberInput({
+  value,
+  onCommit,
+  placeholder,
+  className,
+}: {
+  value: number | null;
+  onCommit: (v: number | null) => void;
+  placeholder: string;
+  className: string;
+}) {
+  const [text, setText] = useState(value === null ? "" : String(value).replace(".", ","));
+  const [prev, setPrev] = useState(value);
+  if (value !== prev) {
+    setPrev(value);
+    setText(value === null ? "" : String(value).replace(".", ","));
+  }
+  return (
+    <input
+      value={text}
+      onChange={(e) => setText(e.target.value)}
+      onBlur={() => {
+        const n = Number(text.trim().replace(",", "."));
+        onCommit(text.trim() === "" || !Number.isFinite(n) || n < 0 ? null : n);
+      }}
+      placeholder={placeholder}
+      inputMode="decimal"
+      className={className}
+    />
+  );
+}
+
+// Осмотр по карте: вода рядом с расчётом полос по Водному кодексу, зарастание, подъезд.
+// Правки сразу идут в форму — сохраняются вместе с участком
+function SurveySection({ form, onApply }: { form: PlotInput; onApply: (patch: Partial<PlotInput>) => void }) {
+  const survey = form.survey ?? emptySurvey();
+  const set = (patch: Partial<Survey>) => onApply({ survey: { ...survey, ...patch } });
+  const setWater = (i: number, patch: Partial<WaterItem>) =>
+    set({ water: survey.water.map((w, j) => (j === i ? { ...w, ...patch } : w)) });
+  return (
+    <div className="flex flex-col gap-2 rounded-lg bg-sky-50/60 p-2 text-xs dark:bg-sky-950/30">
+      <p className="font-medium text-zinc-700 dark:text-zinc-300">Осмотр по карте — что рядом с участком</p>
+      <p className="text-zinc-500">
+        Смотрите подложку на той же карте: реки, ручьи, озёра, пруды, болота, канавы — даже если зон вокруг них не
+        нарисовано, полосы по Водному кодексу есть. Расстояние — от края участка до уреза воды (линейка справа на
+        карте). Длину реки и площадь озера можно взять в Государственном водном реестре или прикинуть по карте.
+      </p>
+      {survey.water.map((w, i) => {
+        const strips = waterStrips(w);
+        const sizeName = sizeLabel(w.kind);
+        return (
+          <div key={i} className="flex flex-col gap-1 border-l-2 border-sky-300 pl-2 dark:border-sky-800">
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={w.kind}
+                onChange={(e) => setWater(i, { kind: e.target.value as WaterKind })}
+                className={smallInput}
+              >
+                {(Object.keys(waterKinds) as WaterKind[]).map((k) => (
+                  <option key={k} value={k}>
+                    {waterKinds[k]}
+                  </option>
+                ))}
+              </select>
+              <input
+                value={w.name}
+                onChange={(e) => setWater(i, { name: e.target.value })}
+                placeholder="название"
+                className={`${smallInput} w-36`}
+              />
+              <NumberInput
+                value={w.distanceM}
+                onCommit={(v) => setWater(i, { distanceM: v })}
+                placeholder="до участка, м"
+                className={`${smallInput} w-28`}
+              />
+              {sizeName && (
+                <NumberInput
+                  value={w.size}
+                  onCommit={(v) => setWater(i, { size: v })}
+                  placeholder={sizeName}
+                  className={`${smallInput} w-28`}
+                />
+              )}
+              <button
+                type="button"
+                onClick={() => set({ water: survey.water.filter((_, j) => j !== i) })}
+                className="text-zinc-400 hover:text-rose-600"
+                title="Убрать"
+              >
+                ✕
+              </button>
+            </div>
+            <p
+              className={
+                strips.touches
+                  ? "text-amber-800 dark:text-amber-300"
+                  : strips.touches === false
+                    ? "text-emerald-700 dark:text-emerald-400"
+                    : "text-zinc-500"
+              }
+            >
+              {waterSummary(w)}
+            </p>
+          </div>
+        );
+      })}
+      <button
+        type="button"
+        onClick={() => set({ water: [...survey.water, { kind: "river", name: "", distanceM: null, size: null }] })}
+        className="self-start text-sky-700 hover:underline dark:text-sky-400"
+      >
+        + вода рядом
+      </button>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+        <label className="flex items-center gap-1.5">
+          <input type="checkbox" checked={survey.overgrown} onChange={(e) => set({ overgrown: e.target.checked })} />
+          зарастает лесом или кустарником
+        </label>
+        <label className="flex items-center gap-1.5">
+          подъезд:
+          <select
+            value={survey.access}
+            onChange={(e) => set({ access: e.target.value as AccessKind })}
+            className={smallInput}
+          >
+            {(Object.keys(accessKinds) as AccessKind[]).map((k) => (
+              <option key={k} value={k}>
+                {accessKinds[k]}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <input
+        value={survey.note}
+        onChange={(e) => set({ note: e.target.value })}
+        placeholder="Что ещё видно: деревня в 1 км, ЛЭП вдоль края, мелиоративные канавы…"
+        className={`${smallInput} w-full`}
+      />
+    </div>
+  );
+}
+
 function PlanCheck({
   form,
   onApply,
@@ -1644,7 +1804,7 @@ function PlanCheck({
     <div ref={box} className="flex flex-col gap-2 rounded-xl border border-dashed border-zinc-300 p-3 text-sm sm:col-span-2 dark:border-zinc-700">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <button type="button" onClick={() => setOpen((v) => !v)} className="font-medium hover:underline">
-          {open ? "▾" : "▸"} Проверить генплан (функциональная зона, планируемые объекты)
+          {open ? "▾" : "▸"} Осмотр по карте и генплан (вода рядом, функциональная зона, планируемые объекты)
         </button>
         {form.planCheckedAt && (
           <span
@@ -1691,8 +1851,17 @@ function PlanCheck({
           ))}
         </div>
       )}
+      {!open && (form.survey?.water.length ?? 0) > 0 && (
+        <div className="flex flex-col gap-0.5 text-xs text-zinc-600 dark:text-zinc-400">
+          {form.survey.water.map((w, i) => (
+            <p key={i}>💧 {waterSummary(w)}</p>
+          ))}
+        </div>
+      )}
       {open && (
         <>
+          <SurveySection form={form} onApply={onApply} />
+          <p className="text-xs font-medium text-zinc-700 dark:text-zinc-300">Генплан</p>
           <div className="text-xs text-zinc-500">
             <p>
               Карта откроется на тематике «Минсельхоз России» с включёнными слоями ФГИС ТП: функциональные зоны генплана,
@@ -2878,12 +3047,14 @@ function claudePlanTask(district: string, plots: Plot[]) {
     `- карта генплана (тематика «Минсельхоз России», папка «ФГИС ТП»): ${NSPD_PLAN_MAP}`,
     "- найди участок поиском «Объекты недвижимости» и щёлкни по нему (у многоконтурных — по каждой группе контуров): в списке будут функциональные зоны генплана в этой точке;",
     "- зоны рисуются только на мелком масштабе (около 2 км) — отдали карту и посмотри, не проходит ли по участку планируемая дорога, ЛЭП, трубопровод или ж/д; у объектов смотри «Статус объекта» (планируемый или существующий);",
-    "- отметь, задевают ли участок водоохранные зоны и береговые полосы этих слоёв.",
+    "- отметь, задевают ли участок водоохранные зоны и береговые полосы этих слоёв;",
+    "- осмотри подложку вокруг участка: реки, ручьи, озёра, пруды, болота, канавы в пределах ~300 м (расстояние — от края участка до воды, линейкой НСПД), заросло ли поле лесом или кустарником, есть ли подъезд.",
     "",
     "Как записывать: сначала сделай копию data/registry.json, затем PATCH http://localhost:3001/api/plots/<id> —",
     "planCheckedAt — сегодняшняя дата; planResult: ok — только зона сельхозугодий / сельхозназначения (и, может быть, вода); check — всё остальное (зона лесов, застройка, планируемый объект, нет данных);",
     `planFindings — что нашлось: ${planFindingsList.map((f) => `${f.key} (${f.label})`).join(", ")};`,
-    `в notes добавь строку «${PLAN_NOTE_PREFIX}, <дата> ${CLAUDE_MARK}: …» — какие зоны и объекты нашлись и где.`,
+    `survey — осмотр: { water: [{ kind: ${Object.keys(waterKinds).join(" | ")}, name, distanceM — до участка в метрах, size — длина реки в км или площадь озера в км² (если не знаешь — null) }], overgrown: true/false, access: road | track | none, note — что ещё видно };`,
+    `в notes добавь строку «${PLAN_NOTE_PREFIX}, <дата> ${CLAUDE_MARK}: …» — какие зоны и объекты нашлись и где, и что увидел при осмотре.`,
     "Участок не отклоняй сам (status не меняй) — это решаю я.",
     "Если интерфейс НСПД сбоит — пропусти участок и в конце скажи, какие остались непроверенными.",
   ].join("\n");
