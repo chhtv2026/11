@@ -59,6 +59,7 @@ function normalize(data: Partial<Data>): Data {
       rightsCheckedAt: p.rightsCheckedAt ?? null,
       torgiCheckedAt: p.torgiCheckedAt ?? null,
       torgiLotDate: p.torgiLotDate ?? null,
+      restrictionsCheckedAt: p.restrictionsCheckedAt ?? null,
       adminRequestAt: p.adminRequestAt ?? null,
       checks: { ...emptyChecks(), ...p.checks },
       scores: p.scores ?? {},
@@ -231,7 +232,7 @@ function cleanObligations(obligations: Partial<Obligation>[] | undefined): Oblig
 // Сложные поля проверяются отдельно; undefined — поле не прислали, оставляем как было
 function cleanPlotInput(input: Partial<PlotInput>) {
   const fields: Partial<PlotInput> = pick(emptyPlot(), input);
-  for (const key of ["nspdCheckedAt", "rightsCheckedAt", "torgiCheckedAt", "torgiLotDate", "adminRequestAt"] as const) {
+  for (const key of ["nspdCheckedAt", "rightsCheckedAt", "torgiCheckedAt", "torgiLotDate", "restrictionsCheckedAt", "adminRequestAt"] as const) {
     if (fields[key] !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(String(fields[key]))) fields[key] = null;
   }
   if (fields.cadastralValue !== undefined) {

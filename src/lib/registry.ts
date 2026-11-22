@@ -130,7 +130,7 @@ export function assess(plot: Pick<Plot, "checks" | "scores" | "permittedUse">, w
 // чего НСПД не показывает, — начиная с прав третьих лиц по справочной информации Росреестра
 const checkSteps: { factor: StopFactor; label: string }[] = [
   { factor: "rights", label: "права третьих лиц — справочная информация Росреестра" },
-  { factor: "restrictions", label: "ограничения (ЗОУИТ, ООПТ) — выписка ЕГРН, карта зон НСПД" },
+  { factor: "restrictions", label: "ограничения (ЗОУИТ, ООПТ) — слои карты НСПД" },
   { factor: "route", label: "законный способ получить участок" },
   { factor: "access", label: "подъезд к участку" },
   { factor: "category", label: "категория земель" },
@@ -142,6 +142,7 @@ export type CheckProgress = {
   nspd: boolean;
   rights: boolean;
   torgi: boolean;
+  restrictions: boolean;
   next: string | null;
   warn?: boolean;
   // Дата отправки запроса в администрацию
@@ -150,14 +151,18 @@ export type CheckProgress = {
 
 // Где участок в проверке и что делать дальше; у исключённого следующего шага нет
 export function checkProgress(
-  plot: Pick<Plot, "checks" | "scores" | "permittedUse" | "nspdCheckedAt" | "rightsCheckedAt" | "torgiCheckedAt" | "adminRequestAt">,
+  plot: Pick<
+    Plot,
+    "checks" | "scores" | "permittedUse" | "nspdCheckedAt" | "rightsCheckedAt" | "torgiCheckedAt" | "restrictionsCheckedAt" | "adminRequestAt"
+  >,
   vri: VriOverrides = {},
 ): CheckProgress {
   const nspd = Boolean(plot.nspdCheckedAt);
   const rights = Boolean(plot.rightsCheckedAt);
   const torgi = Boolean(plot.torgiCheckedAt);
+  const restrictions = Boolean(plot.restrictionsCheckedAt);
   const request = plot.adminRequestAt ?? null;
-  const done = (next: string | null) => ({ nspd, rights, torgi, next, request });
+  const done = (next: string | null) => ({ nspd, rights, torgi, restrictions, next, request });
   if ((Object.keys(stopFactors) as StopFactor[]).some((k) => checkValue(plot, k, vri) === "no")) return done(null);
   if (!nspd) return done("сверить с карточкой НСПД");
   const step = checkSteps.find((s) => checkValue(plot, s.factor, vri) === "unknown");
@@ -165,10 +170,16 @@ export function checkProgress(
   // Права третьих лиц: после Росреестра — торги и извещения, их видно только на torgi.gov.ru
   if (!torgi) return done("права третьих лиц — проверить torgi.gov.ru");
   // Карточка Росреестра вставлена, но вопрос остался (свежая регистрация собственности) — нужен ответ администрации
+  // До запроса в администрацию — сначала зоны на карте: если участок в них не годится, спрашивать незачем
+  if (step?.factor === "rights" && rights && !restrictions && checkValue(plot, "restrictions", vri) === "unknown") {
+    return done(checkSteps.find((s) => s.factor === "restrictions")!.label);
+  }
   if (step?.factor === "rights" && rights) {
     if (request) return done(`права третьих лиц — ждём ответ администрации (до ${addDays(request, ADMIN_ANSWER_DAYS).split("-").reverse().join(".")})`);
     return { ...done("права третьих лиц — уточнить в администрации"), warn: true };
   }
+  // Зоны на карте сверены, но режим зоны (ООПТ, культурное наследие) ещё надо уточнить
+  if (step?.factor === "restrictions" && restrictions) return { ...done("ограничения — уточнить режим зоны"), warn: true };
   if (step) return done(step.label);
   const rated = (Object.keys(criteria) as Criterion[]).filter((k) => plot.scores[k]).length;
   return done(rated < Object.keys(criteria).length ? "оценить баллами" : null);
@@ -338,6 +349,8 @@ export type Plot = {
   torgiCheckedAt: string | null;
   // Дата начала приёма заявок самого свежего известного лота: более старая выгрузка не перебивает новую
   torgiLotDate: string | null;
+  // Когда участок сверен со слоями ЗОУИТ, ООПТ и лесничеств на карте НСПД
+  restrictionsCheckedAt: string | null;
   // Когда по участку отправлен запрос в администрацию (договоры до года, заявления, торги); ответ — 30 дней (59-ФЗ)
   adminRequestAt: string | null;
   landCategory: string;
@@ -379,6 +392,7 @@ export function emptyPlot(): PlotInput {
     rightsCheckedAt: null,
     torgiCheckedAt: null,
     torgiLotDate: null,
+    restrictionsCheckedAt: null,
     adminRequestAt: null,
     landCategory: "Земли сельскохозяйственного назначения",
     permittedUse: "",

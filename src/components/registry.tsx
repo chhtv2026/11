@@ -1240,6 +1240,188 @@ function TorgiCheck({ form, onApply }: { form: PlotInput; onApply: (patch: Parti
   );
 }
 
+// Слои карты НСПД для проверки ограничений: пять групп ЗОУИТ, ООПТ и лесничества
+const NSPD_ZONES_MAP =
+  "https://nspd.gov.ru/map?thematic=PKK&baseLayerId=235&active_layers=37577%2C37578%2C37579%2C37580%2C37581%2C875845%2C875866";
+
+// Что нашлось под участком на карте НСПД и что это значит.
+// effect: "no" — исключить; "check" — режим зоны надо уточнить; "limit" — ограничивает, но сельхозработам не мешает
+const restrictionFindings = [
+  {
+    key: "forest",
+    label: "Лесничество / лесной фонд",
+    effect: "no",
+    note: "пересечение с лесничеством (лесным фондом) — эту часть по 10.1 не получить.",
+  },
+  {
+    key: "oopt",
+    label: "ООПТ (заказник, заповедник, нацпарк, памятник природы)",
+    effect: "check",
+    note: "участок (или его часть) в границах ООПТ — уточнить режим по положению об ООПТ: запрещена ли распашка, сенокошение, строительство.",
+  },
+  {
+    key: "heritage",
+    label: "Объект культурного наследия или его зона охраны",
+    effect: "check",
+    note: "объект культурного наследия или его зона — уточнить режим: возможны запрет распашки и земляных работ.",
+  },
+  {
+    key: "sanitary",
+    label: "Зона санитарной охраны водозабора",
+    effect: "check",
+    note: "зона санитарной охраны источника водоснабжения — уточнить пояс: в первом поясе сельхозработы запрещены.",
+  },
+  {
+    key: "water",
+    label: "Водоохранная зона / прибрежная полоса",
+    effect: "limit",
+    note: "водоохранная зона или прибрежная полоса — в прибрежной полосе нельзя пахать и выпасать скот, в водоохранной — ограничения по удобрениям и стоянкам техники.",
+  },
+  {
+    key: "utility",
+    label: "Охранная зона ЛЭП, газопровода, дороги, связи",
+    effect: "limit",
+    note: "охранная зона инженерных сетей или дороги — сельхозработы можно, строить нельзя, работы глубже 0,3–0,45 м согласовывать с владельцем сети.",
+  },
+  {
+    key: "flood",
+    label: "Зона затопления / подтопления",
+    effect: "limit",
+    note: "зона затопления или подтопления — для пашни терпимо, для дома КФХ и построек критично.",
+  },
+  {
+    key: "other",
+    label: "Иная зона (приаэродромная, охотугодья и т. п.)",
+    effect: "limit",
+    note: "иная зона с особыми условиями — сельхозиспользованию обычно не мешает.",
+  },
+] as const;
+type RestrictionKey = (typeof restrictionFindings)[number]["key"];
+
+// Ограничения: ЗОУИТ, ООПТ, лесничества — по слоям карты НСПД (бесплатно; «Градпроработка» в НСПД платная)
+function RestrictionsCheck({ form, onApply }: { form: PlotInput; onApply: (patch: Partial<PlotInput>) => void }) {
+  const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [found, setFound] = useState<Set<RestrictionKey>>(new Set());
+  const [comment, setComment] = useState("");
+  const [message, setMessage] = useState<{ tone: "ok" | "warn" | "bad"; text: string } | null>(null);
+  const number = form.cadastralNumber.trim();
+
+  async function copyNumber() {
+    try {
+      await navigator.clipboard.writeText(number);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {}
+  }
+
+  function apply(nothing: boolean) {
+    const day = today();
+    const items = restrictionFindings.filter((f) => found.has(f.key));
+    const value = nothing ? "yes" : items.some((f) => f.effect === "no") ? "no" : items.some((f) => f.effect === "check") ? "unknown" : "yes";
+    const lines = nothing
+      ? ["ЗОУИТ, ООПТ и лесничеств под участком нет."]
+      : items.map((f) => f.note);
+    const extra = comment.trim() ? [`Уточнение: ${comment.trim()}`] : [];
+    onApply({
+      restrictionsCheckedAt: day,
+      checks: { ...form.checks, restrictions: value },
+      notes: [form.notes.trim(), `Ограничения по карте НСПД, ${formatDay(day)}: ${[...lines, ...extra].join(" ")}`].filter(Boolean).join("\n"),
+    });
+    setMessage(
+      value === "no"
+        ? { tone: "bad", text: "Участок исключён (лесной фонд). Если пересекается только часть — опишите в уточнении и верните стоп-фактор вручную. Сохраните участок." }
+        : value === "unknown"
+          ? { tone: "warn", text: "Отмечено: режим зоны надо уточнить — в карточке появится жёлтое «уточнить режим зоны». Сохраните участок." }
+          : { tone: "ok", text: `Отмечено: ${nothing ? "ограничений нет" : "ограничения есть, но участок годится"}. Сохраните участок.` },
+    );
+  }
+
+  const tone = { ok: "text-emerald-700 dark:text-emerald-400", warn: "text-amber-700 dark:text-amber-400", bad: "text-rose-600" };
+  const effectClass = {
+    no: "text-rose-700 dark:text-rose-400",
+    check: "text-amber-800 dark:text-amber-300",
+    limit: "",
+  };
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border border-dashed border-zinc-300 p-3 text-sm sm:col-span-2 dark:border-zinc-700">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <button type="button" onClick={() => setOpen((v) => !v)} className="font-medium hover:underline">
+          {open ? "▾" : "▸"} Проверить ограничения (ЗОУИТ, ООПТ, лес) по карте НСПД
+        </button>
+        {form.restrictionsCheckedAt && (
+          <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
+            ✓ ограничения проверены {formatDay(form.restrictionsCheckedAt)}
+          </span>
+        )}
+        {number && (
+          <button type="button" onClick={copyNumber} className="text-xs text-zinc-500 hover:text-zinc-800">
+            {copied ? "номер скопирован" : "скопировать номер"}
+          </button>
+        )}
+        <a href={NSPD_ZONES_MAP} target="_blank" rel="noreferrer" className="text-xs text-sky-700 hover:underline dark:text-sky-400">
+          открыть карту НСПД со слоями зон ↗
+        </a>
+      </div>
+      {open && (
+        <>
+          <p className="text-xs text-zinc-500">
+            По ссылке карта откроется уже с включёнными слоями ЗОУИТ, ООПТ и лесничеств. Вставьте номер в поиск, откройте
+            участок и щёлкайте по его контурам: НСПД покажет, какие зоны лежат в этом месте. У многоконтурных участков
+            проверьте все группы контуров. «Градостроительная проработка» в НСПД платная — она не нужна.
+          </p>
+          <p className="text-xs text-zinc-500">Отметьте всё, что нашлось:</p>
+          <div className="flex flex-col gap-1">
+            {restrictionFindings.map((f) => (
+              <label key={f.key} className={`flex items-baseline gap-2 text-xs ${effectClass[f.effect]}`}>
+                <input
+                  type="checkbox"
+                  checked={found.has(f.key)}
+                  onChange={(e) => {
+                    const next = new Set(found);
+                    if (e.target.checked) next.add(f.key);
+                    else next.delete(f.key);
+                    setFound(next);
+                  }}
+                />
+                <span>
+                  {f.label}
+                  {f.effect === "no" ? " — исключить" : f.effect === "check" ? " — уточнить режим" : " — ограничение"}
+                </span>
+              </label>
+            ))}
+          </div>
+          <input
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            placeholder="Уточнение: номер зоны, какие контуры задеты (например: ООПТ 60:00-6.330, южные контуры)"
+            className={`${inputClass} text-xs`}
+          />
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={found.size === 0}
+              onClick={() => apply(false)}
+              className="rounded-lg bg-zinc-900 px-3 py-1.5 text-xs text-white hover:bg-zinc-700 disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900"
+            >
+              Записать найденное
+            </button>
+            <button
+              type="button"
+              onClick={() => apply(true)}
+              className="rounded-lg border border-emerald-400 px-3 py-1.5 text-xs text-emerald-800 hover:bg-emerald-50 dark:border-emerald-700 dark:text-emerald-300"
+            >
+              Ничего не нашлось
+            </button>
+          </div>
+        </>
+      )}
+      {message && <p className={`text-xs ${tone[message.tone]}`}>{message.text}</p>}
+      {message && <SaveHere />}
+    </div>
+  );
+}
+
 // Читает текст первого файла из ZIP (выгрузка НСПД приходит архивом с одним CSV)
 // При импорте из НСПД: новые участки районов последней полной выгрузки торгов без лотов получат «✓ торги»
 // Предупреждение: по этим районам такая выгрузка уже загружалась
@@ -1669,6 +1851,7 @@ function PlotForm({
         <NspdPaste form={form} onApply={(patch) => setForm((f) => ({ ...f, ...patch }))} />
         <RightsPaste form={form} onApply={(patch) => setForm((f) => ({ ...f, ...patch }))} />
         <TorgiCheck form={form} onApply={(patch) => setForm((f) => ({ ...f, ...patch }))} />
+        <RestrictionsCheck form={form} onApply={(patch) => setForm((f) => ({ ...f, ...patch }))} />
         <Field label="Кадастровый номер">
           <input
             value={form.cadastralNumber}
@@ -1957,6 +2140,7 @@ function ProgressLine({ progress }: { progress: CheckProgress }) {
       {progress.nspd && <span className="text-emerald-700 dark:text-emerald-400">✓ НСПД</span>}
       {progress.rights && <span className="text-emerald-700 dark:text-emerald-400">✓ Росреестр</span>}
       {progress.torgi && <span className="text-emerald-700 dark:text-emerald-400">✓ торги</span>}
+      {progress.restrictions && <span className="text-emerald-700 dark:text-emerald-400">✓ ограничения</span>}
       {progress.request && <span className="text-violet-700 dark:text-violet-400">✉ запрос {shortDay(progress.request)}</span>}
       {progress.next &&
         (progress.warn ? (
@@ -2250,12 +2434,12 @@ function downloadDoc(text: string, fileName: string, headerLines: number) {
   URL.revokeObjectURL(url);
 }
 
-// Участки района, прошедшие НСПД, Росреестр и торги и не исключённые
+// Участки района, прошедшие НСПД, Росреестр, торги и проверку ограничений и не исключённые
 function requestCandidates(plots: Plot[], settings: Settings) {
   return plots.filter((p) => {
     if (assess(p, settings.weights, settings.vri).kind === "excluded") return false;
     const progress = checkProgress(p, settings.vri);
-    return progress.nspd && progress.rights && progress.torgi;
+    return progress.nspd && progress.rights && progress.torgi && progress.restrictions;
   });
 }
 
@@ -2339,12 +2523,12 @@ function AdminRequest({
       <div className="flex flex-col gap-4 text-sm">
         <p className="text-zinc-500">
           Одно письмо на район: есть ли договоры до года (их нет в ЕГРН), заявления по п. 4 ст. 12 и ст. 10.1 101-ФЗ и ст.
-          39.18 ЗК, планы торгов. Ответ — в течение 30 дней (59-ФЗ). В список входят участки, прошедшие НСПД, Росреестр и
-          торги; сначала отмечены «Перспективные» — критерии перспективности разработаем в следующем блоке.
+          39.18 ЗК, планы торгов. Ответ — в течение 30 дней (59-ФЗ). В список входят участки, прошедшие НСПД, Росреестр,
+          торги и проверку ограничений; сначала отмечены «Перспективные» — критерии перспективности разработаем в следующем блоке.
         </p>
 
         {candidates.length === 0 ? (
-          <p className="text-amber-700 dark:text-amber-400">В районе пока нет участков, прошедших все три проверки.</p>
+          <p className="text-amber-700 dark:text-amber-400">В районе пока нет участков, прошедших все четыре проверки.</p>
         ) : (
           <div className="flex flex-col gap-1">
             <div className="flex items-center justify-between text-xs text-zinc-500">
