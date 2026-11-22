@@ -64,6 +64,7 @@ import {
   type WaterItem,
   type WaterKind,
 } from "@/lib/water";
+import { buildMemo, memoSections, memoText } from "@/lib/memo";
 import { TORGI_LOTS, parseTorgiExport, torgiExcludes, torgiOutcomes as lotOutcomes, type TorgiExport, type TorgiOutcome } from "@/lib/torgi";
 
 type Data = { sources: Source[]; plots: Plot[]; settings: Settings };
@@ -1733,6 +1734,90 @@ function SurveySection({ form, onApply }: { form: PlotInput; onApply: (patch: Pa
   );
 }
 
+// Памятка по участку: собирается из проверки ограничений, осмотра и генплана — по тому, что сейчас в форме
+function MemoBlock({ form }: { form: PlotInput }) {
+  const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const ready = Boolean(form.restrictionsCheckedAt || form.planCheckedAt || form.survey?.water.length);
+  const memo = buildMemo({
+    restrictionZones: form.restrictionZones ?? [],
+    restrictionsCheckedAt: form.restrictionsCheckedAt,
+    planFindings: form.planFindings ?? [],
+    planCheckedAt: form.planCheckedAt,
+    survey: form.survey ?? emptySurvey(),
+  });
+  const count = memoSections.reduce((n, s) => n + memo[s.key].length, 0);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(memoText(form.cadastralNumber, memo));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {}
+  }
+
+  const head = {
+    bad: "text-rose-700 dark:text-rose-400",
+    warn: "text-amber-800 dark:text-amber-300",
+    ok: "text-emerald-700 dark:text-emerald-400",
+  };
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border border-zinc-300 bg-zinc-50/60 p-3 text-sm sm:col-span-2 dark:border-zinc-700 dark:bg-zinc-900/40">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <button type="button" onClick={() => setOpen((v) => !v)} className="font-medium hover:underline">
+          {open ? "▾" : "▸"} 📋 Памятка: что можно и чего нельзя на участке
+        </button>
+        {ready && count > 0 && (
+          <span className="text-xs text-zinc-500">
+            {memoSections
+              .filter((s) => memo[s.key].length)
+              .map((s) => `${s.title.toLowerCase()}: ${memo[s.key].length}`)
+              .join(" · ")}
+          </span>
+        )}
+        {open && count > 0 && (
+          <button type="button" onClick={copy} className="text-xs text-sky-700 hover:underline dark:text-sky-400">
+            {copied ? "скопировано" : "скопировать текстом"}
+          </button>
+        )}
+      </div>
+      {open && !ready && (
+        <p className="text-xs text-zinc-500">
+          Памятка собирается из проверки ограничений, осмотра по карте и генплана — пока ни одна не сделана.
+        </p>
+      )}
+      {open && ready && count === 0 && (
+        <p className="text-xs text-zinc-500">Найденное пока ни к чему не обязывает — пунктов нет.</p>
+      )}
+      {open &&
+        memoSections
+          .filter((s) => memo[s.key].length)
+          .map((s) => (
+            <div key={s.key} className="flex flex-col gap-1">
+              <p className={`text-xs font-semibold uppercase tracking-wide ${head[s.tone]}`}>{s.title}</p>
+              <ul className="flex flex-col gap-1.5">
+                {memo[s.key].map((item, i) => (
+                  <li key={i} className="text-xs text-zinc-700 dark:text-zinc-300">
+                    <span className="mr-1 rounded bg-zinc-200 px-1 text-[10px] text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
+                      {item.source}
+                    </span>
+                    {item.where && <span className="font-medium">{item.where}: </span>}
+                    {item.text} <span className="text-zinc-500">({item.law})</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+      {open && count > 0 && (
+        <p className="text-[11px] text-zinc-400">
+          Источник: ЕГРН — проверка ограничений; закон — полосы, посчитанные от воды из осмотра; генплан — слои ФГИС ТП.
+          Нормы указаны по действующим редакциям; перед важным решением сверьтесь с текстом закона.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function PlanCheck({
   form,
   onApply,
@@ -2413,6 +2498,7 @@ function PlotForm({
           setOpen={setPlanOpen}
           scrollOnMount={draft?.panel === "plan"}
         />
+        <MemoBlock form={form} />
         <Field label="Кадастровый номер">
           <input
             value={form.cadastralNumber}
