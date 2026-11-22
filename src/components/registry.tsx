@@ -1874,7 +1874,9 @@ function ImportForm({
 
 // Открытая карточка участка (с несохранёнными правками) переживает уход на НСПД и перезагрузку страницы:
 // хранится в sessionStorage вкладки и открывается снова при возвращении
-type CardDraft = { id: string; form: PlotInput; panel: "restrictions" | null };
+// updatedAt — версия участка, с которой начата правка: если участок с тех пор изменили (например, Claude записал
+// проверку), старый снимок формы не подставляем, чтобы не показать и не сохранить устаревшие данные
+type CardDraft = { id: string; form: PlotInput; panel: "restrictions" | null; updatedAt?: string };
 const CARD_DRAFT_KEY = "plots.openCard";
 
 function readCardDraft(): CardDraft | null {
@@ -1918,7 +1920,7 @@ function PlotForm({
   const [restrictionsOpen, setRestrictionsOpen] = useState(draft?.panel === "restrictions");
   // Запоминаем открытую карточку, пока она открыта; закрытие и сохранение — забывают
   useEffect(() => {
-    if (plot) writeCardDraft({ id: plot.id, form, panel: restrictionsOpen ? "restrictions" : null });
+    if (plot) writeCardDraft({ id: plot.id, form, panel: restrictionsOpen ? "restrictions" : null, updatedAt: plot.updatedAt });
   }, [plot, form, restrictionsOpen]);
   const set = <K extends keyof PlotInput>(key: K, value: PlotInput[K]) => setForm((f) => ({ ...f, [key]: value }));
 
@@ -3159,7 +3161,7 @@ export default function Registry() {
     const item = data.plots.find((p) => p.id === saved.id);
     if (!item) return clearCardDraft();
     // eslint-disable-next-line react-hooks/set-state-in-effect -- sessionStorage доступен только после гидрации
-    setDraft(saved);
+    setDraft(saved.updatedAt === item.updatedAt ? saved : { ...saved, form: { ...item }, updatedAt: item.updatedAt });
     setEditing({ kind: "plot", item });
   }, [data]);
 
