@@ -1544,6 +1544,7 @@ const NSPD_PLAN_MAP =
   "https://nspd.gov.ru/map?thematic=PKK&theme_id=566&baseLayerId=235&active_layers=846615%2C844783%2C846114%2C847068%2C844794%2C844738%2C844885";
 
 const PLAN_NOTE_PREFIX = "Генплан по карте НСПД";
+const SURVEY_NOTE_PREFIX = "Осмотр по карте НСПД";
 
 // effect: ok — так и должно быть; check — уточнить; limit — к сведению
 const planFindingsList = [
@@ -1841,7 +1842,7 @@ function PlanCheck({
   );
   const [comment, setComment] = useState("");
   const [message, setMessage] = useState<{ tone: "ok" | "warn" | "bad"; text: string } | null>(null);
-  const lines = form.notes.split("\n").filter((l) => l.startsWith(PLAN_NOTE_PREFIX));
+  const lines = form.notes.split("\n").filter((l) => l.startsWith(PLAN_NOTE_PREFIX) || l.startsWith(SURVEY_NOTE_PREFIX));
   const byClaude = lines.some((l) => l.includes(CLAUDE_MARK));
 
   function note(text: string) {
