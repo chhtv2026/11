@@ -71,8 +71,14 @@ export function waterStrips(w: WaterItem): WaterStrips {
   }
   const coastal = protection === null ? null : Math.min(50, protection);
   const widest = Math.max(protection ?? 0, shore ?? 0);
-  const unknown = w.distanceM === null || (protection === null && protectionNote.includes("укажите"));
-  return { protection, protectionNote, coastal, shore, touches: unknown ? null : (w.distanceM ?? Infinity) < widest };
+  // Размер не указан: если вода дальше самой широкой возможной зоны (река — 200 м, озеро — 50 м), ответ ясен и так
+  const sizeMissing = protection === null && protectionNote.includes("укажите");
+  const maxPossible = w.kind === "river" ? 200 : 50;
+  if (w.distanceM === null) return { protection, protectionNote, coastal, shore, touches: null };
+  if (sizeMissing) {
+    return { protection, protectionNote, coastal, shore, touches: w.distanceM >= maxPossible ? false : null };
+  }
+  return { protection, protectionNote, coastal, shore, touches: w.distanceM < widest };
 }
 
 // Одной строкой: что значит эта вода для участка
