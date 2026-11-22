@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   addMonths,
   assess,
@@ -1308,8 +1308,24 @@ const restrictionFindings = [
 type RestrictionKey = (typeof restrictionFindings)[number]["key"];
 
 // Ограничения: ЗОУИТ, ООПТ, лесничества — по слоям карты НСПД (бесплатно; «Градпроработка» в НСПД платная)
-function RestrictionsCheck({ form, onApply }: { form: PlotInput; onApply: (patch: Partial<PlotInput>) => void }) {
-  const [open, setOpen] = useState(false);
+function RestrictionsCheck({
+  form,
+  onApply,
+  open,
+  setOpen,
+  scrollOnMount,
+}: {
+  form: PlotInput;
+  onApply: (patch: Partial<PlotInput>) => void;
+  open: boolean;
+  setOpen: (open: boolean | ((v: boolean) => boolean)) => void;
+  scrollOnMount: boolean;
+}) {
+  const box = useRef<HTMLDivElement>(null);
+  // Вернулись с карты НСПД — показать блок проверки, а не начало карточки
+  useEffect(() => {
+    if (scrollOnMount) box.current?.scrollIntoView({ block: "start" });
+  }, [scrollOnMount]);
   const [copied, setCopied] = useState(false);
   const [found, setFound] = useState<Set<RestrictionKey>>(new Set());
   const [comment, setComment] = useState("");
@@ -1355,7 +1371,7 @@ function RestrictionsCheck({ form, onApply }: { form: PlotInput; onApply: (patch
     limit: "",
   };
   return (
-    <div className="flex flex-col gap-2 rounded-xl border border-dashed border-zinc-300 p-3 text-sm sm:col-span-2 dark:border-zinc-700">
+    <div ref={box} className="flex flex-col gap-2 rounded-xl border border-dashed border-zinc-300 p-3 text-sm sm:col-span-2 dark:border-zinc-700">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <button type="button" onClick={() => setOpen((v) => !v)} className="font-medium hover:underline">
           {open ? "▾" : "▸"} Проверить ограничения (ЗОУИТ, ООПТ, лес) по карте НСПД
@@ -1370,7 +1386,13 @@ function RestrictionsCheck({ form, onApply }: { form: PlotInput; onApply: (patch
             {copied ? "номер скопирован" : "скопировать номер"}
           </button>
         )}
-        <a href={NSPD_ZONES_MAP} target="_blank" rel="noreferrer" className="text-xs text-sky-700 hover:underline dark:text-sky-400">
+        <a
+          href={NSPD_ZONES_MAP}
+          target="_blank"
+          rel="noreferrer"
+          onClick={() => setOpen(true)}
+          className="text-xs text-sky-700 hover:underline dark:text-sky-400"
+        >
           открыть карту НСПД со слоями зон ↗
         </a>
       </div>
@@ -1782,21 +1804,54 @@ function ImportForm({
   );
 }
 
+// Открытая карточка участка (с несохранёнными правками) переживает уход на НСПД и перезагрузку страницы:
+// хранится в sessionStorage вкладки и открывается снова при возвращении
+type CardDraft = { id: string; form: PlotInput; panel: "restrictions" | null };
+const CARD_DRAFT_KEY = "plots.openCard";
+
+function readCardDraft(): CardDraft | null {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(CARD_DRAFT_KEY) ?? "null") as CardDraft | null;
+    return saved && typeof saved.id === "string" && saved.form ? saved : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeCardDraft(draft: CardDraft) {
+  try {
+    sessionStorage.setItem(CARD_DRAFT_KEY, JSON.stringify(draft));
+  } catch {}
+}
+
+function clearCardDraft() {
+  try {
+    sessionStorage.removeItem(CARD_DRAFT_KEY);
+  } catch {}
+}
+
 function PlotForm({
   plot,
   sources,
   settings,
   onClose,
   onSaved,
+  draft,
 }: {
   plot: Plot | null;
   sources: Source[];
   settings: Settings;
   onClose: () => void;
   onSaved: () => void;
+  draft?: CardDraft | null;
 }) {
-  const [form, setForm] = useState<PlotInput>(() => (plot ? { ...plot } : emptyPlot()));
+  const [form, setForm] = useState<PlotInput>(() => (draft ? { ...draft.form } : plot ? { ...plot } : emptyPlot()));
   const [error, setError] = useState("");
+  const [restrictionsOpen, setRestrictionsOpen] = useState(draft?.panel === "restrictions");
+  // Запоминаем открытую карточку, пока она открыта; закрытие и сохранение — забывают
+  useEffect(() => {
+    if (plot) writeCardDraft({ id: plot.id, form, panel: restrictionsOpen ? "restrictions" : null });
+  }, [plot, form, restrictionsOpen]);
   const set = <K extends keyof PlotInput>(key: K, value: PlotInput[K]) => setForm((f) => ({ ...f, [key]: value }));
 
   async function submit(e: React.FormEvent) {
@@ -1862,7 +1917,13 @@ function PlotForm({
         <NspdPaste form={form} onApply={(patch) => setForm((f) => ({ ...f, ...patch }))} />
         <RightsPaste form={form} onApply={(patch) => setForm((f) => ({ ...f, ...patch }))} />
         <TorgiCheck form={form} onApply={(patch) => setForm((f) => ({ ...f, ...patch }))} />
-        <RestrictionsCheck form={form} onApply={(patch) => setForm((f) => ({ ...f, ...patch }))} />
+        <RestrictionsCheck
+          form={form}
+          onApply={(patch) => setForm((f) => ({ ...f, ...patch }))}
+          open={restrictionsOpen}
+          setOpen={setRestrictionsOpen}
+          scrollOnMount={draft?.panel === "restrictions"}
+        />
         <Field label="Кадастровый номер">
           <input
             value={form.cadastralNumber}
@@ -2937,6 +2998,8 @@ export default function Registry() {
   const [tab, setTab] = useState<"plots" | "deadlines" | "sources">("plots");
   const [editing, setEditing] = useState<Editing>(null);
   const [error, setError] = useState("");
+  const [draft, setDraft] = useState<CardDraft | null>(null);
+  const restored = useRef(false);
 
   const reload = useCallback(async () => {
     try {
@@ -2952,8 +3015,27 @@ export default function Registry() {
     reload();
   }, [reload]);
 
-  function saved() {
+  // После первой загрузки — снова открыть карточку, которая была открыта до ухода со страницы
+  useEffect(() => {
+    if (!data || restored.current) return;
+    restored.current = true;
+    const saved = readCardDraft();
+    if (!saved) return;
+    const item = data.plots.find((p) => p.id === saved.id);
+    if (!item) return clearCardDraft();
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- sessionStorage доступен только после гидрации
+    setDraft(saved);
+    setEditing({ kind: "plot", item });
+  }, [data]);
+
+  function closeEditing() {
+    clearCardDraft();
+    setDraft(null);
     setEditing(null);
+  }
+
+  function saved() {
+    closeEditing();
     reload();
   }
 
@@ -3036,8 +3118,9 @@ export default function Registry() {
           plot={editing.item}
           sources={data.sources}
           settings={data.settings}
-          onClose={() => setEditing(null)}
+          onClose={closeEditing}
           onSaved={saved}
+          draft={draft}
         />
       )}
       {data && editing?.kind === "vri" && <VriForm vri={data.settings.vri} onClose={() => setEditing(null)} onSaved={saved} />}
