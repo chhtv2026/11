@@ -2540,9 +2540,19 @@ function downloadDoc(text: string, fileName: string, headerLines: number) {
   URL.revokeObjectURL(url);
 }
 
-// Участки района без проверки ограничений (и не исключённые) — их можно поручить Claude
+// Сколько участков отдавать Claude за один раз: проверка одного занимает 10–15 минут
+const CLAUDE_TASK_BATCH = 3;
+
+// Участки района без проверки ограничений (и не исключённые) — их можно поручить Claude.
+// Сначала самые перспективные (по оценке), затем ещё не оценённые
 function restrictionsToCheck(plots: Plot[], settings: Settings) {
-  return plots.filter((p) => !p.restrictionsCheckedAt && assess(p, settings.weights, settings.vri).kind !== "excluded");
+  const scoreOf = (p: Plot) => {
+    const a = assess(p, settings.weights, settings.vri);
+    return a.kind === "scored" ? a.score : -1;
+  };
+  return plots
+    .filter((p) => !p.restrictionsCheckedAt && assess(p, settings.weights, settings.vri).kind !== "excluded")
+    .sort((a, b) => scoreOf(b) - scoreOf(a));
 }
 
 // Готовое задание для Claude: проверить ограничения по карте НСПД и записать в карточки
@@ -2904,14 +2914,16 @@ function PlotsView({ data, onEdit, onChanged }: { data: Data; onEdit: (plot: Plo
                             type="button"
                             onClick={(e) => {
                               e.preventDefault();
-                              copyClaudeTask(district, toCheck);
+                              copyClaudeTask(district, toCheck.slice(0, CLAUDE_TASK_BATCH));
                             }}
-                            title="Скопировать задание: Claude проверит ограничения этих участков по карте НСПД и запишет найденное в карточки. Вставьте задание в окно Claude."
+                            title={`Скопировать задание на ${Math.min(toCheck.length, CLAUDE_TASK_BATCH)} уч. (сначала самые перспективные): Claude проверит ограничения по карте НСПД и запишет найденное в карточки. Проверенные уходят из очереди — следующее нажатие даст следующую группу. Вставьте задание в окно Claude.`}
                             className="rounded-full bg-sky-100 px-2 py-0.5 text-xs text-sky-800 hover:bg-sky-200 dark:bg-sky-950 dark:text-sky-300"
                           >
                             {taskCopied === district
                               ? "✓ задание скопировано — вставьте в окно Claude"
-                              : `⚙ Ограничения — задание для Claude · ${toCheck.length}`}
+                              : toCheck.length > CLAUDE_TASK_BATCH
+                                ? `⚙ Ограничения — задание для Claude · ${CLAUDE_TASK_BATCH} из ${toCheck.length}`
+                                : `⚙ Ограничения — задание для Claude · ${toCheck.length}`}
                           </button>
                         )}
                         {ready > 0 && (
