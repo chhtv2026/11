@@ -89,6 +89,8 @@ export type Settings = {
   torgiExcluded: Record<string, string>;
   imports: ImportRecord[];
   applicant: Applicant;
+  // Ставки расчистки заросшей сельхозземли, ₽/га (задаёт пользователь)
+  clearing: { shrubPerHa: number | null; forestPerHa: number | null };
 };
 
 // Заявитель — для запросов в администрацию

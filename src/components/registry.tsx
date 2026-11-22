@@ -55,7 +55,11 @@ import { ROSREESTR_ONLINE, ownershipClaimDeadline, parseRosreestrCard } from "@/
 import {
   accessKinds,
   emptySurvey,
+  overgrownPercent,
+  overgrowthKinds,
   sizeLabel,
+  usageCostSuggestion,
+  type OvergrowthKind,
   waterKinds,
   waterStrips,
   waterSummary,
@@ -373,6 +377,22 @@ function AssessmentEditor({
               <p className="text-xs text-zinc-400">
                 1 — {criteria[key].low}; 5 — {criteria[key].high}
               </p>
+              {key === "usageCost" && form.survey?.overgrowth && (
+                <p className="text-xs text-sky-700 dark:text-sky-400">
+                  осмотр по карте: {overgrowthKinds[form.survey.overgrowth]}
+                  {form.survey.overgrowth !== "clean" && `, заросло ≈ ${overgrownPercent(form.survey)} %`} — по осмотру{" "}
+                  {usageCostSuggestion(form.survey)}
+                  {form.scores.usageCost !== usageCostSuggestion(form.survey) && (
+                    <button
+                      type="button"
+                      onClick={() => onScores({ ...form.scores, usageCost: usageCostSuggestion(form.survey) ?? undefined })}
+                      className="ml-2 rounded border border-sky-400 px-1.5 hover:bg-sky-50 dark:border-sky-700 dark:hover:bg-sky-950"
+                    >
+                      поставить {usageCostSuggestion(form.survey)}
+                    </button>
+                  )}
+                </p>
+              )}
             </li>
           ))}
         </ul>
@@ -1724,9 +1744,31 @@ function SurveySection({ form, onApply }: { form: PlotInput; onApply: (patch: Pa
       </button>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
         <label className="flex items-center gap-1.5">
-          <input type="checkbox" checked={survey.overgrown} onChange={(e) => set({ overgrown: e.target.checked })} />
-          зарастает лесом или кустарником
+          зарастание:
+          <select
+            value={survey.overgrowth}
+            onChange={(e) => set({ overgrowth: e.target.value as OvergrowthKind })}
+            className={smallInput}
+          >
+            {(Object.keys(overgrowthKinds) as OvergrowthKind[]).map((k) => (
+              <option key={k} value={k}>
+                {overgrowthKinds[k]}
+              </option>
+            ))}
+          </select>
         </label>
+        {survey.overgrowth && survey.overgrowth !== "clean" && (
+          <label className="flex items-center gap-1.5">
+            заросло
+            <NumberInput
+              value={survey.overgrownShare}
+              onCommit={(v) => set({ overgrownShare: v === null ? null : Math.min(100, v) })}
+              placeholder={`≈ ${overgrownPercent({ ...survey, overgrownShare: null })}`}
+              className={`${smallInput} w-16`}
+            />
+            % площади
+          </label>
+        )}
         <label className="flex items-center gap-1.5">
           подъезд:
           <select
@@ -1748,6 +1790,71 @@ function SurveySection({ form, onApply }: { form: PlotInput; onApply: (patch: Pa
         placeholder="Что ещё видно: деревня в 1 км, ЛЭП вдоль края, мелиоративные канавы…"
         className={`${smallInput} w-full`}
       />
+    </div>
+  );
+}
+
+// Расчистка по осмотру: заросшая площадь × ставка (кустарник или лес) — подсказка к «Расходам на старте».
+// Ставки общие для всех участков, хранятся в настройках
+function ClearingHint({
+  form,
+  settings,
+  onAdd,
+}: {
+  form: PlotInput;
+  settings: Settings;
+  onAdd: (amount: number) => void;
+}) {
+  const [rates, setRates] = useState(settings.clearing ?? { shrubPerHa: null, forestPerHa: null });
+  const survey = form.survey;
+  if (!survey?.overgrowth || survey.overgrowth === "clean") return null;
+  const share = overgrownPercent(survey) ?? 0;
+  const ha = form.areaHa ? Math.round(((form.areaHa * share) / 100) * 100) / 100 : null;
+  const forest = survey.overgrowth === "forest";
+  const rate = forest ? rates.forestPerHa : rates.shrubPerHa;
+  const amount = ha !== null && rate !== null ? Math.round(ha * rate) : null;
+
+  async function saveRate(key: "shrubPerHa" | "forestPerHa", v: number | null) {
+    const next = { ...rates, [key]: v };
+    setRates(next);
+    try {
+      await api("/api/settings", "PATCH", { clearing: next });
+    } catch {}
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5 rounded-xl border border-dashed border-amber-300 p-3 text-xs sm:col-span-2 dark:border-amber-800">
+      <p className="font-medium text-zinc-700 dark:text-zinc-300">Расчистка по осмотру</p>
+      <p className="text-zinc-600 dark:text-zinc-400">
+        {overgrowthKinds[survey.overgrowth]}, заросло ≈ {share} %
+        {ha !== null ? ` — около ${ha.toLocaleString("ru-RU")} га из ${form.areaHa?.toLocaleString("ru-RU")}` : " — укажите площадь участка"}.
+      </p>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-zinc-600 dark:text-zinc-400">
+        <label className="flex items-center gap-1.5">
+          ставка, кустарник:
+          <NumberInput value={rates.shrubPerHa} onCommit={(v) => saveRate("shrubPerHa", v)} placeholder="₽/га" className={`${smallInput} w-24`} />
+        </label>
+        <label className="flex items-center gap-1.5">
+          лес:
+          <NumberInput value={rates.forestPerHa} onCommit={(v) => saveRate("forestPerHa", v)} placeholder="₽/га" className={`${smallInput} w-24`} />
+        </label>
+        <span className="text-zinc-400">ставки общие для всех участков</span>
+      </div>
+      {amount !== null ? (
+        <p className="text-zinc-700 dark:text-zinc-300">
+          Расчистка ≈ {ha?.toLocaleString("ru-RU")} га × {rate?.toLocaleString("ru-RU")} ₽ = <b>{amount.toLocaleString("ru-RU")} ₽</b>
+          {forest && " (часть затрат может окупить продажа древесины — рубка по правилам ПП РФ № 1509)"}
+          <button
+            type="button"
+            onClick={() => onAdd(amount)}
+            className="ml-2 rounded border border-zinc-300 px-1.5 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-900"
+          >
+            добавить к «Расходам на старте»
+          </button>
+        </p>
+      ) : (
+        <p className="text-zinc-500">Задайте ставку {forest ? "для леса" : "для кустарника"} — посчитаю стоимость расчистки.</p>
+      )}
     </div>
   );
 }
@@ -2612,6 +2719,11 @@ function PlotForm({
           onScores={(scores) => set("scores", scores)}
         />
         <EconomicsEditor economics={form.economics} areaHa={form.areaHa} onChange={(e) => set("economics", e)} />
+        <ClearingHint
+          form={form}
+          settings={settings}
+          onAdd={(amount) => set("economics", { ...form.economics, startCosts: (form.economics.startCosts ?? 0) + amount })}
+        />
         <RouteEditor route={form.route} onChange={(r) => set("route", r)} />
         <DeadlinesEditor deadlines={form.deadlines} onChange={(d) => set("deadlines", d)} />
         <ObligationsEditor
@@ -3158,7 +3270,7 @@ function claudePlanTask(district: string, plots: Plot[]) {
     "Как записывать: сначала сделай копию data/registry.json, затем PATCH http://localhost:3001/api/plots/<id> —",
     "planCheckedAt — сегодняшняя дата; planResult: ok — только зона сельхозугодий / сельхозназначения (и, может быть, вода); check — всё остальное (зона лесов, застройка, планируемый объект, нет данных);",
     `planFindings — что нашлось: ${planFindingsList.map((f) => `${f.key} (${f.label})`).join(", ")};`,
-    `survey — осмотр: { water: [{ kind: ${Object.keys(waterKinds).join(" | ")}, name, distanceM — до участка в метрах, size — длина реки в км или площадь озера в км² (если не знаешь — null) }], overgrown: true/false, access: road | track | none, note — что ещё видно };`,
+    `survey — осмотр: { water: [{ kind: ${Object.keys(waterKinds).join(" | ")}, name, distanceM — до участка в метрах, size — длина реки в км или площадь озера в км² (если не знаешь — null) }], overgrowth: ${Object.keys(overgrowthKinds).filter(Boolean).map((k) => `${k} (${overgrowthKinds[k as OvergrowthKind]})`).join(" | ")}, overgrownShare — доля заросшей площади в % на глаз по космоснимку, access: road | track | none, note — что ещё видно };`,
     `в notes добавь строку «${PLAN_NOTE_PREFIX}, <дата> ${CLAUDE_MARK}: …» — какие зоны и объекты нашлись и где, и что увидел при осмотре.`,
     "Участок не отклоняй сам (status не меняй) — это решаю я.",
     "Если интерфейс НСПД сбоит — пропусти участок и в конце скажи, какие остались непроверенными.",

@@ -37,7 +37,13 @@ import { economicsFields, emptyEconomics, type Economics, type EconomicsField } 
 import { normalizeCadastralNumber } from "./nspd";
 import { districtByCadastralNumber, regionByCadastralNumber } from "./regions";
 import { vriClassifier, vriVerdicts, type VriVerdict } from "./vri";
-import { accessKinds, emptySurvey, waterKinds, type Survey, type WaterItem } from "./water";
+import { accessKinds, emptySurvey, overgrowthKinds, waterKinds, type Survey, type WaterItem } from "./water";
+
+// Осмотр, сохранённый до появления степени зарастания: была только галочка «зарастает»
+function normalizeSurvey(survey: (Partial<Survey> & { overgrown?: boolean }) | undefined): Survey {
+  const { overgrown, ...rest } = survey ?? {};
+  return { ...emptySurvey(), ...rest, overgrowth: rest.overgrowth ?? (overgrown ? "partial" : "") };
+}
 
 // Осмотр по карте: только известные виды воды, числа — неотрицательные
 function cleanSurvey(survey: Partial<Survey> | undefined): Survey | undefined {
@@ -50,9 +56,11 @@ function cleanSurvey(survey: Partial<Survey> | undefined): Survey | undefined {
     .filter((w) => w && w.kind in waterKinds)
     .slice(0, 20)
     .map((w) => ({ kind: w.kind, name: String(w.name ?? "").trim().slice(0, 100), distanceM: num(w.distanceM), size: num(w.size) }));
+  const share = num(survey.overgrownShare);
   return {
     water,
-    overgrown: Boolean(survey.overgrown),
+    overgrowth: survey.overgrowth && survey.overgrowth in overgrowthKinds ? survey.overgrowth : "",
+    overgrownShare: share === null ? null : Math.min(100, share),
     access: survey.access && survey.access in accessKinds ? survey.access : "",
     note: String(survey.note ?? "").slice(0, 2000),
   };
@@ -84,7 +92,7 @@ function normalize(data: Partial<Data>): Data {
       planCheckedAt: p.planCheckedAt ?? null,
       planResult: p.planResult ?? "",
       planFindings: p.planFindings ?? [],
-      survey: { ...emptySurvey(), ...p.survey },
+      survey: normalizeSurvey(p.survey),
       adminRequestAt: p.adminRequestAt ?? null,
       checks: { ...emptyChecks(), ...p.checks },
       scores: p.scores ?? {},
@@ -100,6 +108,7 @@ function normalize(data: Partial<Data>): Data {
       torgiExcluded: data.settings?.torgiExcluded ?? {},
       imports: data.settings?.imports ?? [],
       applicant: { ...emptyApplicant, ...data.settings?.applicant },
+      clearing: { shrubPerHa: null, forestPerHa: null, ...data.settings?.clearing },
     },
   };
 }
@@ -587,6 +596,19 @@ export function importPlots(input: {
       });
     }
     return { created, skipped, updated, absentMarked, excluded, excludedBefore, sourceId: source.id };
+  });
+}
+
+// Ставки расчистки, ₽/га: кустарник и лес
+export function updateClearing(input: unknown) {
+  return mutate((data) => {
+    const value = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
+    for (const key of ["shrubPerHa", "forestPerHa"] as const) {
+      if (!(key in value)) continue;
+      const n = value[key] === null || value[key] === "" ? null : Number(value[key]);
+      data.settings.clearing[key] = n !== null && Number.isFinite(n) && n >= 0 ? n : null;
+    }
+    return data.settings;
   });
 }
 

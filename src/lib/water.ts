@@ -23,10 +23,44 @@ export const accessKinds = {
 } as const;
 export type AccessKind = keyof typeof accessKinds;
 
-export type Survey = { water: WaterItem[]; overgrown: boolean; access: AccessKind; note: string };
+// Зарастание: степень и доля площади на глаз (по космоснимку). forest — признаки леса по ПП РФ № 1509:
+// деревья выше 5 м, покров больше 75 % площади, сомкнутость крон 0,8–1
+export const overgrowthKinds = {
+  "": "не смотрели",
+  clean: "чистое поле / луг",
+  partial: "местами кустарник",
+  dense: "сплошь кустарник, молодой лес",
+  forest: "лес: деревья выше 5 м, сомкнутый",
+} as const;
+export type OvergrowthKind = keyof typeof overgrowthKinds;
+
+export type Survey = {
+  water: WaterItem[];
+  overgrowth: OvergrowthKind;
+  // Доля заросшей площади, % (на глаз)
+  overgrownShare: number | null;
+  access: AccessKind;
+  note: string;
+};
 
 export function emptySurvey(): Survey {
-  return { water: [], overgrown: false, access: "", note: "" };
+  return { water: [], overgrowth: "", overgrownShare: null, access: "", note: "" };
+}
+
+// Доля зарастания: указанная или типичная для степени
+export function overgrownPercent(s: Pick<Survey, "overgrowth" | "overgrownShare">): number | null {
+  if (s.overgrownShare !== null) return s.overgrownShare;
+  return { "": null, clean: 0, partial: 20, dense: 80, forest: 100 }[s.overgrowth];
+}
+
+// Подсказка балла «Затраты на сельхозиспользование» (5 — можно сразу косить, 1 — зарос, нужна расчистка)
+export function usageCostSuggestion(s: Pick<Survey, "overgrowth" | "overgrownShare">): number | null {
+  if (!s.overgrowth) return null;
+  if (s.overgrowth === "clean") return 5;
+  if (s.overgrowth === "forest") return 1;
+  const share = overgrownPercent(s) ?? 0;
+  if (s.overgrowth === "dense") return share >= 50 ? 1 : 2;
+  return share <= 15 ? 4 : share < 50 ? 3 : 2;
 }
 
 export const sizeLabel = (kind: WaterKind) =>
