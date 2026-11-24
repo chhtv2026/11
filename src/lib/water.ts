@@ -41,10 +41,13 @@ export type Survey = {
   overgrownShare: number | null;
   access: AccessKind;
   note: string;
+  // Точка внутри участка (WGS84) — чтобы открывать снимки сразу на месте
+  lat: number | null;
+  lon: number | null;
 };
 
 export function emptySurvey(): Survey {
-  return { water: [], overgrowth: "", overgrownShare: null, access: "", note: "" };
+  return { water: [], overgrowth: "", overgrownShare: null, access: "", note: "", lat: null, lon: null };
 }
 
 // Доля зарастания: указанная или типичная для степени
@@ -136,4 +139,30 @@ export function waterSummary(w: WaterItem) {
         ? `на участок заходит: ${reach.join(", ")}`
         : "до участка полосы не доходят";
   return `${name}, ${where}: ${parts.join("; ")} — ${verdict}.`;
+}
+
+// «56.40828, 29.22773» (как копируют из Яндекс/Google Карт) → широта и долгота
+export function parsePoint(text: string): { lat: number; lon: number } | null {
+  const numbers = (t: string) => t.match(/-?\d+(?:\.\d+)?/g)?.map(Number) ?? [];
+  // Сначала с точкой как разделителем дробей, иначе — с запятой («56,40828; 29,22773»)
+  let nums = numbers(text);
+  if (nums.length !== 2) nums = numbers(text.replace(/(\d),(\d)/g, "$1.$2"));
+  if (nums.length !== 2) return null;
+  const [lat, lon] = nums;
+  if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
+  return { lat, lon };
+}
+
+// Космоснимок Яндекс Карт с меткой на участке
+export function yandexSatelliteUrl(lat: number, lon: number): string {
+  const ll = `${lon}%2C${lat}`;
+  return `https://yandex.ru/maps/?ll=${ll}&z=16&l=sat&pt=${ll}%2Cpm2rdm`;
+}
+
+// Карта НСПД с центром на участке (координаты в веб-Меркаторе). Подложку НСПД при загрузке всегда сбрасывает на схему
+export function nspdPointUrl(lat: number, lon: number): string {
+  const R = 6378137;
+  const x = Math.round((lon * Math.PI * R) / 180);
+  const y = Math.round(R * Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360)));
+  return `https://nspd.gov.ru/map?thematic=PKK&coordinate_x=${x}&coordinate_y=${y}&zoom=16`;
 }

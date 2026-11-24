@@ -45,6 +45,14 @@ function normalizeSurvey(survey: (Partial<Survey> & { overgrown?: boolean }) | u
   return { ...emptySurvey(), ...rest, overgrowth: rest.overgrowth ?? (overgrown ? "partial" : "") };
 }
 
+function cleanPoint(lat: unknown, lon: unknown): { lat: number | null; lon: number | null } {
+  const a = lat === null || lat === undefined || lat === "" ? NaN : Number(lat);
+  const b = lon === null || lon === undefined || lon === "" ? NaN : Number(lon);
+  return Number.isFinite(a) && Number.isFinite(b) && Math.abs(a) <= 90 && Math.abs(b) <= 180
+    ? { lat: a, lon: b }
+    : { lat: null, lon: null };
+}
+
 // Осмотр по карте: только известные виды воды, числа — неотрицательные
 function cleanSurvey(survey: Partial<Survey> | undefined): Survey | undefined {
   if (!survey || typeof survey !== "object") return undefined;
@@ -63,6 +71,7 @@ function cleanSurvey(survey: Partial<Survey> | undefined): Survey | undefined {
     overgrownShare: share === null ? null : Math.min(100, share),
     access: survey.access && survey.access in accessKinds ? survey.access : "",
     note: String(survey.note ?? "").slice(0, 2000),
+    ...cleanPoint(survey.lat, survey.lon),
   };
 }
 

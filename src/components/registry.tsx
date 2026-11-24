@@ -57,8 +57,11 @@ import {
   emptySurvey,
   overgrownPercent,
   overgrowthKinds,
+  nspdPointUrl,
+  parsePoint,
   sizeLabel,
   usageCostSuggestion,
+  yandexSatelliteUrl,
   type OvergrowthKind,
   waterKinds,
   waterStrips,
@@ -1571,7 +1574,6 @@ const NSPD_PLAN_MAP =
   "https://nspd.gov.ru/map?thematic=PKK&theme_id=566&baseLayerId=235&active_layers=846615%2C844783%2C846114%2C847068%2C844794%2C844738%2C844885";
 
 // Космоснимок (подложка «ДЗЗ. Российская Федерация») — видно грунтовки, зарастание, фактическое использование
-const NSPD_SATELLITE_MAP = "https://nspd.gov.ru/map?thematic=PKK&baseLayerId=36067";
 
 const PLAN_NOTE_PREFIX = "Генплан по карте НСПД";
 const SURVEY_NOTE_PREFIX = "Осмотр по карте НСПД";
@@ -1653,6 +1655,40 @@ function NumberInput({
   );
 }
 
+// Точка участка «широта, долгота»: текст держим у себя, в форму — по уходу из поля, если разобралась
+function PointInput({
+  lat,
+  lon,
+  onCommit,
+}: {
+  lat: number | null;
+  lon: number | null;
+  onCommit: (p: { lat: number | null; lon: number | null }) => void;
+}) {
+  const shown = lat === null || lon === null ? "" : `${lat}, ${lon}`;
+  const [text, setText] = useState(shown);
+  const [prev, setPrev] = useState(shown);
+  if (shown !== prev) {
+    setPrev(shown);
+    setText(shown);
+  }
+  const bad = text.trim() !== "" && !parsePoint(text);
+  return (
+    <input
+      value={text}
+      onChange={(e) => setText(e.target.value)}
+      onBlur={() => {
+        if (text.trim() === "") return onCommit({ lat: null, lon: null });
+        const p = parsePoint(text);
+        if (p) onCommit(p);
+      }}
+      placeholder="56.40828, 29.22773"
+      title={bad ? "Нужно два числа: широта, долгота" : undefined}
+      className={`${smallInput} w-44 ${bad ? "border-red-400 dark:border-red-700" : ""}`}
+    />
+  );
+}
+
 // Осмотр по карте: вода рядом с расчётом полос по Водному кодексу, зарастание, подъезд.
 // Правки сразу идут в форму — сохраняются вместе с участком
 function SurveySection({ form, onApply }: { form: PlotInput; onApply: (patch: Partial<PlotInput>) => void }) {
@@ -1668,12 +1704,44 @@ function SurveySection({ form, onApply }: { form: PlotInput; onApply: (patch: Pa
         нарисовано, полосы по Водному кодексу есть. Расстояние — от края участка до уреза воды (линейка справа на
         карте). Длину реки и площадь озера — из Государственного водного реестра или Википедии; мелких рек там
         часто нет — тогда в OpenStreetMap (openstreetmap.org), там же видно название. Подъезд, грунтовки и
-        зарастание видны на космоснимке:{" "}
-        <a href={NSPD_SATELLITE_MAP} target="_blank" rel="noreferrer" className="text-sky-700 hover:underline dark:text-sky-400">
-          открыть космоснимок в НСПД ↗
-        </a>{" "}
-        (подложка «ДЗЗ. Российская Федерация»; другие снимки — кнопка подложки справа вверху: «Ортофотопланы»). Подъезд из
-        осмотра сам ставит «да» в оценке «Есть физический подъезд», если там ещё ничего не выбрано.
+        зарастание видны на космоснимке. Подъезд из осмотра сам ставит «да» в оценке «Есть физический подъезд», если
+        там ещё ничего не выбрано.
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-zinc-600 dark:text-zinc-400">Точка участка (широта, долгота):</span>
+        <PointInput lat={survey.lat} lon={survey.lon} onCommit={(p) => set(p)} />
+        {survey.lat !== null && survey.lon !== null ? (
+          <>
+            <a
+              href={yandexSatelliteUrl(survey.lat, survey.lon)}
+              target="_blank"
+              rel="noreferrer"
+              className="text-sky-700 hover:underline dark:text-sky-400"
+            >
+              космоснимок Яндекса ↗
+            </a>
+            <a
+              href={nspdPointUrl(survey.lat, survey.lon)}
+              target="_blank"
+              rel="noreferrer"
+              className="text-sky-700 hover:underline dark:text-sky-400"
+            >
+              НСПД на месте участка ↗
+            </a>
+          </>
+        ) : (
+          <a href={NSPD_MAP} target="_blank" rel="noreferrer" className="text-sky-700 hover:underline dark:text-sky-400">
+            карта НСПД ↗
+          </a>
+        )}
+      </div>
+      <p className="text-zinc-500">
+        {survey.lat !== null && survey.lon !== null
+          ? "На снимке Яндекса участок отмечен точкой, но без границ. "
+          : "Точку можно скопировать из Яндекс Карт или Google Карт (щелчок правой кнопкой по участку — координаты), тогда снимок откроется сразу на месте. "}
+        В НСПД видны границы, но снимок нужно включать самим: НСПД при открытии всегда ставит схему — кнопка подложки справа
+        вверху → «Развернуть» → «ДЗЗ. Российская Федерация» (есть ещё «Ортофотопланы»). Заливка найденного участка
+        затемняет снимок — закройте вкладку «Результаты поиска», и цвета станут видны.
       </p>
       {survey.water.map((w, i) => {
         const strips = waterStrips(w);
@@ -3264,13 +3332,13 @@ function claudePlanTask(district: string, plots: Plot[]) {
     "- найди участок поиском «Объекты недвижимости» и щёлкни по нему (у многоконтурных — по каждой группе контуров): в списке будут функциональные зоны генплана в этой точке;",
     "- зоны рисуются только на мелком масштабе (около 2 км) — отдали карту и посмотри, не проходит ли по участку планируемая дорога, ЛЭП, трубопровод или ж/д; у объектов смотри «Статус объекта» (планируемый или существующий);",
     "- отметь, задевают ли участок водоохранные зоны и береговые полосы этих слоёв;",
-    `- осмотри подложку вокруг участка: реки, ручьи, озёра, пруды, болота, канавы в пределах ~300 м (расстояние — от края участка до воды, линейкой НСПД), заросло ли поле лесом или кустарником, есть ли подъезд — подъезд и зарастание смотри на космоснимке (подложка «ДЗЗ. Российская Федерация»: ${NSPD_SATELLITE_MAP});`,
+    `- осмотри подложку вокруг участка: реки, ручьи, озёра, пруды, болота, канавы в пределах ~300 м (расстояние — от края участка до воды, линейкой НСПД), заросло ли поле лесом или кустарником, есть ли подъезд — подъезд и зарастание смотри на космоснимке (подложка «ДЗЗ. Российская Федерация» — переключи кнопкой подложки, по ссылке НСПД её сбрасывает; заливку найденного участка убери, закрыв «Результаты поиска»);`,
     "- название, длину реки и площадь озера возьми из Государственного водного реестра или Википедии, а если там нет — из OpenStreetMap (Nominatim: обратный поиск по координатам участка с layer=natural, контур озера и отрезки реки — через lookup с polygon_geojson); в заметке укажи источник.",
     "",
     "Как записывать: сначала сделай копию data/registry.json, затем PATCH http://localhost:3001/api/plots/<id> —",
     "planCheckedAt — сегодняшняя дата; planResult: ok — только зона сельхозугодий / сельхозназначения (и, может быть, вода); check — всё остальное (зона лесов, застройка, планируемый объект, нет данных);",
     `planFindings — что нашлось: ${planFindingsList.map((f) => `${f.key} (${f.label})`).join(", ")};`,
-    `survey — осмотр: { water: [{ kind: ${Object.keys(waterKinds).join(" | ")}, name, distanceM — до участка в метрах, size — длина реки в км или площадь озера в км² (если не знаешь — null) }], overgrowth: ${Object.keys(overgrowthKinds).filter(Boolean).map((k) => `${k} (${overgrowthKinds[k as OvergrowthKind]})`).join(" | ")}, overgrownShare — доля заросшей площади в % на глаз по космоснимку, access: road | track | none, note — что ещё видно };`,
+    `survey — осмотр: { water: [{ kind: ${Object.keys(waterKinds).join(" | ")}, name, distanceM — до участка в метрах, size — длина реки в км или площадь озера в км² (если не знаешь — null) }], overgrowth: ${Object.keys(overgrowthKinds).filter(Boolean).map((k) => `${k} (${overgrowthKinds[k as OvergrowthKind]})`).join(" | ")}, overgrownShare — доля заросшей площади в % на глаз по космоснимку, access: road | track | none, note — что ещё видно, lat и lon — точка внутри участка (WGS84, широта и долгота) };`,
     `в notes добавь строку «${PLAN_NOTE_PREFIX}, <дата> ${CLAUDE_MARK}: …» — какие зоны и объекты нашлись и где, и что увидел при осмотре.`,
     "Участок не отклоняй сам (status не меняй) — это решаю я.",
     "Если интерфейс НСПД сбоит — пропусти участок и в конце скажи, какие остались непроверенными.",
