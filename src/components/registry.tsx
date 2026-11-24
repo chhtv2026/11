@@ -1408,6 +1408,28 @@ function savedZones(form: PlotInput): RestrictionKey[] {
 const restrictionLines = (notes: string) => notes.split("\n").filter((l) => l.startsWith(RESTRICTIONS_NOTE_PREFIX));
 
 // Ограничения: ЗОУИТ, ООПТ, лесничества — по слоям карты НСПД (бесплатно; «Градпроработка» в НСПД платная)
+// Задание для Claude только по этому участку: копируется, его нужно вставить в чат с Claude
+function ClaudeTaskButton({ label, text }: { label: string; text: string }) {
+  const [copied, setCopied] = useState(false);
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 4000);
+    } catch {}
+  }
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      title="Скопировать задание и вставить его в чат с Claude"
+      className="rounded-md border border-violet-200 bg-violet-50 px-2 py-0.5 text-xs text-violet-800 hover:bg-violet-100 dark:border-violet-900 dark:bg-violet-950/40 dark:text-violet-300"
+    >
+      {copied ? "✓ задание скопировано — вставьте в чат с Claude" : label}
+    </button>
+  );
+}
+
 function RestrictionsCheck({
   form,
   onApply,
@@ -1508,6 +1530,12 @@ function RestrictionsCheck({
         >
           открыть карту НСПД со слоями зон ↗
         </a>
+        {number && (
+          <ClaudeTaskButton
+            label="⚙ задание для Claude — только этот участок"
+            text={claudeRestrictionsTask(form.district || "—", [{ cadastralNumber: number }])}
+          />
+        )}
       </div>
       {lines.length > 0 && (
         <div className="flex flex-col gap-1 rounded-lg bg-zinc-50 px-3 py-2 text-xs dark:bg-zinc-900">
@@ -2152,6 +2180,12 @@ function PlanCheck({
         >
           открыть карту генплана в НСПД ↗
         </a>
+        {form.cadastralNumber.trim() && (
+          <ClaudeTaskButton
+            label="📐 задание для Claude — только этот участок"
+            text={claudePlanTask(form.district || "—", [{ cadastralNumber: form.cadastralNumber.trim() }])}
+          />
+        )}
       </div>
       {lines.length > 0 && (
         <div className="flex flex-col gap-1 rounded-lg bg-zinc-50 px-3 py-2 text-xs dark:bg-zinc-900">
@@ -3365,9 +3399,11 @@ function planToCheck(plots: Plot[], settings: Settings) {
 }
 
 // Задание для Claude: посмотреть генплан по слоям ФГИС ТП на карте НСПД и записать в карточки
-function claudePlanTask(district: string, plots: Plot[]) {
+function claudePlanTask(district: string, plots: Pick<Plot, "cadastralNumber">[]) {
   return [
-    `Посмотри генплан по слоям ФГИС ТП на карте НСПД у участков района «${district}» из реестра «Земля в аренду» — по ним генплан ещё не смотрели:`,
+    plots.length === 1
+      ? `Посмотри генплан по слоям ФГИС ТП на карте НСПД и осмотри по карте участок района «${district}» из реестра «Земля в аренду» — только этот:`
+      : `Посмотри генплан по слоям ФГИС ТП на карте НСПД у участков района «${district}» из реестра «Земля в аренду» — по ним генплан ещё не смотрели:`,
     ...plots.map((p, i) => `${i + 1}. ${p.cadastralNumber}`),
     "",
     "Как смотреть — во встроенном браузере, на карте НСПД; мои данные никуда не вводи, платные сервисы не открывай:",
@@ -3389,9 +3425,11 @@ function claudePlanTask(district: string, plots: Plot[]) {
 }
 
 // Готовое задание для Claude: проверить ограничения по карте НСПД и записать в карточки
-function claudeRestrictionsTask(district: string, plots: Plot[]) {
+function claudeRestrictionsTask(district: string, plots: Pick<Plot, "cadastralNumber">[]) {
   return [
-    `Проверь ограничения (ЗОУИТ, ООПТ, лесничества) по карте НСПД у участков района «${district}» из реестра «Земля в аренду» — у них ограничения ещё не проверены:`,
+    plots.length === 1
+      ? `Проверь ограничения (ЗОУИТ, ООПТ, лесничества) по карте НСПД у участка района «${district}» из реестра «Земля в аренду» — только у этого:`
+      : `Проверь ограничения (ЗОУИТ, ООПТ, лесничества) по карте НСПД у участков района «${district}» из реестра «Земля в аренду» — у них ограничения ещё не проверены:`,
     ...plots.map((p, i) => `${i + 1}. ${p.cadastralNumber}`),
     "",
     "Как проверять — во встроенном браузере, на карте НСПД; мои данные никуда не вводи, платные сервисы («Градостроительная проработка», выписки) не открывай:",
