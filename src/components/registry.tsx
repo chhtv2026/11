@@ -174,26 +174,69 @@ function ConfirmButton({ label, question, onConfirm }: { label: string; question
   );
 }
 
+// Масштаб текста в окнах (карточка, настройки): общий для всех окон, помнится в этом браузере
+const TEXT_SCALES = [1, 1.15, 1.3, 1.5, 1.75];
+const TEXT_SCALE_KEY = "modal.textScale";
+
+function readTextScale(): number {
+  try {
+    const v = Number(localStorage.getItem(TEXT_SCALE_KEY));
+    return TEXT_SCALES.includes(v) ? v : 1;
+  } catch {
+    return 1;
+  }
+}
+
 function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+  const [scale, setScale] = useState(readTextScale);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  function step(dir: 1 | -1) {
+    const i = TEXT_SCALES.indexOf(scale);
+    const next = TEXT_SCALES[Math.min(TEXT_SCALES.length - 1, Math.max(0, i + dir))];
+    setScale(next);
+    try {
+      localStorage.setItem(TEXT_SCALE_KEY, String(next));
+    } catch {}
+  }
+
+  const sizeButton = "rounded-md px-2 py-0.5 text-zinc-500 hover:bg-zinc-200 hover:text-zinc-800 disabled:opacity-30 dark:hover:bg-zinc-800 dark:hover:text-zinc-200";
   return (
     <div className="fixed inset-0 z-10 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:p-8" onMouseDown={onClose}>
       <div
-        className="w-full max-w-2xl rounded-2xl bg-zinc-50 p-5 shadow-xl dark:bg-zinc-950"
+        className="w-full rounded-2xl bg-zinc-50 p-5 shadow-xl dark:bg-zinc-950"
+        // Окно растёт вместе с текстом, но не шире экрана
+        style={{ maxWidth: `min(100%, ${42 * scale}rem)` }}
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-semibold">{title}</h2>
-          <button onClick={onClose} className="text-zinc-400 hover:text-zinc-700" aria-label="Закрыть">
-            ✕
-          </button>
+        <div className="mb-4 flex items-center justify-between gap-2">
+          <h2 className="text-lg font-semibold" style={{ zoom: scale }}>
+            {title}
+          </h2>
+          <div className="flex items-center gap-1">
+            <span className="mr-1 text-xs text-zinc-400">текст</span>
+            <button type="button" onClick={() => step(-1)} disabled={scale === TEXT_SCALES[0]} className={`${sizeButton} text-xs`} title="Мельче">
+              A−
+            </button>
+            <button
+              type="button"
+              onClick={() => step(1)}
+              disabled={scale === TEXT_SCALES[TEXT_SCALES.length - 1]}
+              className={`${sizeButton} text-base`}
+              title="Крупнее"
+            >
+              A+
+            </button>
+            <button onClick={onClose} className="ml-2 text-zinc-400 hover:text-zinc-700" aria-label="Закрыть">
+              ✕
+            </button>
+          </div>
         </div>
-        {children}
+        <div style={{ zoom: scale }}>{children}</div>
       </div>
     </div>
   );
