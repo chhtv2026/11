@@ -27,6 +27,7 @@ import {
   stopFactors,
   workingStatuses,
   checkValue,
+  routeBasis,
   checkProgress,
   type Assessment,
   type CheckProgress,
@@ -242,6 +243,24 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
   );
 }
 
+// Почему «законный способ» стоит так, как стоит: проверка по ст. 10.1 101-ФЗ из того, что уже известно об участке
+function RouteHint({ form, vri }: { form: PlotInput; vri: VriOverrides }) {
+  const basis = routeBasis(form, vri);
+  const manual = form.checks.route !== "unknown";
+  return (
+    <span className="block text-xs text-zinc-500">
+      {manual ? "выбрано вручную; по ст. 10.1 101-ФЗ: " : "по ст. 10.1 101-ФЗ (аренда без торгов для КФХ, до 5 лет): "}
+      {basis.blocking.length > 0 && <span className="text-rose-700 dark:text-rose-400">✕ {basis.blocking.join("; ")}. </span>}
+      {basis.ok.length > 0 && <span className="text-emerald-700 dark:text-emerald-400">✓ {basis.ok.join("; ")}. </span>}
+      {basis.missing.length > 0 && <span className="text-amber-700 dark:text-amber-400">не хватает: {basis.missing.join("; ")}. </span>}
+      {!manual && basis.value === "yes" && "«Да» поставлено по этим проверкам. "}
+      Чужое заявление по 10.1, поданное раньше вас, видно только из ответа администрации
+      {form.adminRequestAt ? ` (запрос отправлен ${formatDay(form.adminRequestAt)})` : ""} — если оно есть, поставьте «нет». Предельный
+      размер считается вместе с уже полученными вами участками.
+    </span>
+  );
+}
+
 function FindingsEditor({ findings, onChange }: { findings: Finding[]; onChange: (f: Finding[]) => void }) {
   function update(index: number, patch: Partial<Finding>) {
     onChange(findings.map((f, i) => (i === index ? { ...f, ...patch } : f)));
@@ -368,6 +387,7 @@ function AssessmentEditor({
               <span>
                 {stopFactors[key]}
                 {key === "permittedUse" && form.permittedUse.trim() && <VriHint permittedUse={form.permittedUse} vri={vri} />}
+                {key === "route" && <RouteHint form={form} vri={vri} />}
                 {key === "access" && form.survey?.access && (
                   <span className="block text-xs text-zinc-500">
                     осмотр по карте: {accessKinds[form.survey.access]}

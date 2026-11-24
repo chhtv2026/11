@@ -108,11 +108,49 @@ export function emptyChecks(): Record<StopFactor, CheckValue> {
 // что бы ни стояло вручную; «подходит» ставит «да», пока вручную ничего не выбрано.
 // Подъезд: если при осмотре по карте видна дорога или грунтовка, а вручную ничего не выбрано — «да».
 // «Подъезда не видно» участок не исключает: проезд можно получить сервитутом — остаётся «не проверено».
-export function checkValue(
-  plot: Pick<Plot, "checks" | "permittedUse"> & { survey?: Pick<Survey, "access"> },
-  key: StopFactor,
-  vri: VriOverrides = {},
-): CheckValue {
+// Что нужно знать об участке, чтобы оценить его по стоп-факторам (owner, площадь и торги — для ст. 10.1)
+export type CheckablePlot = Pick<Plot, "checks" | "permittedUse"> &
+  Partial<Pick<Plot, "owner" | "areaHa" | "torgiCheckedAt">> & { survey?: Pick<Survey, "access"> };
+
+// Предельный размер участка для деятельности КФХ в Псковской области — 300 га
+// (закон Псковской области от 03.10.2003 № 299-ОЗ в ред. закона от 09.03.2016 № 1649-ОЗ; п. 7 ст. 10.1 101-ФЗ)
+export const KFH_MAX_HA = 300;
+
+export type RouteBasis = { value: CheckValue; ok: string[]; missing: string[]; blocking: string[] };
+
+// Законный способ по умолчанию — аренда без торгов по ст. 10.1 101-ФЗ: гражданину или КФХ, до 5 лет,
+// из земель государственной или муниципальной собственности. Отказ — по ст. 39.16 ЗК, сверх предельного
+// размера или если раньше подано чужое заявление (п. 7). Ранние чужие заявления видны только из ответа администрации.
+export function routeBasis(plot: CheckablePlot, vri: VriOverrides = {}): RouteBasis {
+  const ok: string[] = [];
+  const missing: string[] = [];
+  const blocking: string[] = [];
+  const owner = plot.owner ?? "unknown";
+  if (owner === "private") blocking.push("земля частная, а ст. 10.1 — только для государственных и муниципальных земель");
+  else if (owner === "unknown") missing.push("собственник (карточка НСПД)");
+  else ok.push(`земля публичная: ${owners[owner]}`);
+  const other: [StopFactor, string, string][] = [
+    ["category", "категория — сельхозназначение", "категория земель"],
+    ["permittedUse", "ВРИ подходит (менять назначение по 10.1 нельзя, п. 6)", "вид разрешённого использования"],
+    ["rights", "нет аренды, ареста и претендентов (ст. 39.16 ЗК)", "права третьих лиц — справочная информация Росреестра"],
+    ["restrictions", "зоны не запрещают сельхозиспользование", "режим зоны (ООПТ, лесничество)"],
+  ];
+  for (const [key, good, need] of other) {
+    const v = checkValue(plot, key, vri);
+    if (v === "yes") ok.push(good);
+    // «нет» по другому пункту уже исключает участок — здесь только отмечаем, что вопрос не закрыт
+    else missing.push(v === "no" ? `${need} — там «нет»` : need);
+  }
+  if (plot.torgiCheckedAt) ok.push("на torgi.gov.ru нет аукциона и претендентов");
+  else missing.push("торги и извещения на torgi.gov.ru");
+  if (plot.areaHa === null || plot.areaHa === undefined) missing.push("площадь участка");
+  else if (plot.areaHa > KFH_MAX_HA) blocking.push(`площадь ${plot.areaHa} га больше предельных ${KFH_MAX_HA} га для КФХ`);
+  else ok.push(`площадь ${String(plot.areaHa).replace(".", ",")} га — в пределах ${KFH_MAX_HA} га`);
+  return { value: blocking.length ? "no" : missing.length ? "unknown" : "yes", ok, missing, blocking };
+}
+
+export function checkValue(plot: CheckablePlot, key: StopFactor, vri: VriOverrides = {}): CheckValue {
+  if (key === "route" && plot.checks.route === "unknown") return routeBasis(plot, vri).value;
   if (key === "permittedUse") {
     const use = classifyUse(plot.permittedUse, vri);
     if (use?.verdict === "no") return "no";
@@ -130,7 +168,7 @@ export type Assessment =
   | { kind: "scored"; score: number; checksDone: boolean };
 
 export function assess(
-  plot: Pick<Plot, "checks" | "scores" | "permittedUse"> & { survey?: Pick<Survey, "access"> },
+  plot: CheckablePlot & Pick<Plot, "scores">,
   weights: Weights,
   vri: VriOverrides = {},
 ): Assessment {
@@ -185,7 +223,8 @@ export function checkProgress(
     | "restrictionsCheckedAt"
     | "adminRequestAt"
     | "planResult"
-  > & { survey?: Pick<Survey, "access"> },
+  > &
+    CheckablePlot,
   vri: VriOverrides = {},
 ): CheckProgress {
   const nspd = Boolean(plot.nspdCheckedAt);
@@ -215,6 +254,10 @@ export function checkProgress(
   }
   // Зоны на карте сверены, но режим зоны (ООПТ, культурное наследие) ещё надо уточнить
   if (step?.factor === "restrictions" && restrictions) return { ...done("ограничения — уточнить режим зоны"), warn: true };
+  if (step?.factor === "route") {
+    const missing = routeBasis(plot, vri).missing;
+    return done(missing.length ? `законный способ (ст. 10.1) — ${missing[0]}` : step.label);
+  }
   if (step) return done(step.label);
   const rated = (Object.keys(criteria) as Criterion[]).filter((k) => plot.scores[k]).length;
   return done(rated < Object.keys(criteria).length ? "оценить баллами" : null);
