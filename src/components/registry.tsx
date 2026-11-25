@@ -73,6 +73,18 @@ import {
   type WaterKind,
 } from "@/lib/water";
 import { buildMemo, memoSections, memoText } from "@/lib/memo";
+import {
+  emptyScheme,
+  isPendingScheme,
+  parseSchemePoints,
+  schemeCenter,
+  schemeGeoJson,
+  schemeKml,
+  schemeMeasure,
+  schemePointsText,
+  schemeSelfCrossing,
+  validQuarter,
+} from "@/lib/scheme";
 import { TORGI_LOTS, parseTorgiExport, torgiExcludes, torgiOutcomes as lotOutcomes, type TorgiExport, type TorgiOutcome } from "@/lib/torgi";
 
 type Data = { sources: Source[]; plots: Plot[]; settings: Settings };
@@ -1747,6 +1759,214 @@ function NumberInput({
 }
 
 // Точка участка «широта, долгота»: текст держим у себя, в форму — по уходу из поля, если разобралась
+const SCHEME_NOTE_PREFIX = "Контур по слоям НСПД";
+
+function downloadText(fileName: string, text: string, type: string) {
+  const url = URL.createObjectURL(new Blob([text], { type }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+// Задание для Claude: найти или проверить контур будущего участка по слоям НСПД и записать в карточку
+function claudeSchemeTask(form: PlotInput) {
+  const scheme = form.scheme ?? emptyScheme();
+  const name = form.title.trim() || "участок по схеме";
+  return [
+    `Проверь по карте НСПД контур будущего участка «${name}» (район «${form.district || "—"}», квартал ${scheme.quarter || "—"}) из реестра «Земля в аренду» — участок ещё не образован, его хотят заявить на предварительное согласование по схеме (ст. 39.15 ЗК) под аренду по ст. 10.1 101-ФЗ.`,
+    scheme.points.length >= 3
+      ? `Вершины контура (широта, долгота):\n${scheme.points.map((p, i) => `${i + 1}. ${p.lat}, ${p.lon}`).join("\n")}`
+      : "Вершин ещё нет — найди рядом свободную открытую землю (луг, пашня) и нарисуй контур сам.",
+    "",
+    "Как проверять — во встроенном браузере, на карте НСПД; мои данные никуда не вводи, платные сервисы и личный кабинет не открывай:",
+    `- карта: ${NSPD_MAP}; включи слои: все пять «Земельные участки» (ЕГРН, по схеме, на аукционе, по проекту межевания), «Населённые пункты (линии)», «Особо охраняемые природные территории», «Лесничества», пять групп ЗОУИТ и «Кадастровые кварталы»;`,
+    "- подложка «Без картоосновы»: свободная земля — белая; потом «ДЗЗ. Российская Федерация» — поле это или лес;",
+    "- обведи контур («Выбор объектов контуром» → «Выбор полигоном»): площадь видна на карте, в списке слева — всё, что контур задевает; щёлкни и в середину контура;",
+    "- держи зазор от соседних участков, не заходи в лес, лесничество и населённый пункт.",
+    "",
+    "Как записывать: сначала сделай копию data/registry.json, затем PATCH http://localhost:3001/api/plots/<id> —",
+    "scheme: { quarter — кадастровый квартал, points — [{ lat, lon }] по порядку обхода, checkedAt — сегодняшняя дата, если контур ничего не задевает (иначе null) };",
+    "areaHa — площадь контура; survey.lat и survey.lon — точка в середине контура;",
+    `restrictionsCheckedAt, checks.restrictions и restrictionZones — как при проверке ограничений: ${restrictionFindings.map((f) => `${f.key} (${f.label})`).join(", ")};`,
+    `в notes добавь строку «${SCHEME_NOTE_PREFIX}, <дата> ${CLAUDE_MARK}: …» — что видно на снимке, что нашлось по слоям, номер квартала.`,
+    "Участок не отклоняй сам (status не меняй) — это решаю я.",
+  ].join("\n");
+}
+
+// Контур участка, который ещё предстоит образовать: вершины, площадь, выгрузка для карт и отметка сверки со слоями НСПД.
+// Правки сразу идут в форму — сохраняются вместе с участком
+function SchemeSection({ form, onApply }: { form: PlotInput; onApply: (patch: Partial<PlotInput>) => void }) {
+  const scheme = form.scheme ?? emptyScheme();
+  const shown = schemePointsText(scheme.points);
+  const [text, setText] = useState(shown);
+  const [prev, setPrev] = useState(shown);
+  const [help, setHelp] = useState(false);
+  if (shown !== prev) {
+    setPrev(shown);
+    setText(shown);
+  }
+  const parsed = parseSchemePoints(text);
+  const measure = schemeMeasure(parsed.points);
+  const center = schemeCenter(parsed.points);
+  const crossing = schemeSelfCrossing(parsed.points);
+  const quarterBad = scheme.quarter.trim() !== "" && !validQuarter(scheme.quarter);
+  const fileName = (form.title.trim() || scheme.quarter || "участок по схеме").replace(/[\\/:*?"<>|]+/g, "_");
+
+  function commit(value: string) {
+    const { points } = parseSchemePoints(value);
+    const changed = schemePointsText(points) !== schemePointsText(scheme.points);
+    if (!changed) return;
+    const m = schemeMeasure(points);
+    const c = schemeCenter(points);
+    const survey = form.survey ?? emptySurvey();
+    onApply({
+      // Контур поменяли — прежняя сверка со слоями к нему уже не относится
+      scheme: { ...scheme, points, checkedAt: null },
+      ...(m && { areaHa: m.areaHa }),
+      ...(c && { survey: { ...survey, lat: c.lat, lon: c.lon } }),
+    });
+  }
+
+  function markChecked(checked: boolean) {
+    const day = today();
+    const area = measure ? `${String(measure.areaHa).replace(".", ",")} га ` : "";
+    const line = `${SCHEME_NOTE_PREFIX}, ${formatDay(day)}: контур ${area}не задевает участки ЕГРН, чужие схемы, проекты межевания, аукционы и границы населённых пунктов.`;
+    onApply({
+      scheme: { ...scheme, checkedAt: checked ? day : null },
+      ...(checked && !form.notes.includes(line) && { notes: [form.notes.trim(), line].filter(Boolean).join("\n") }),
+    });
+  }
+
+  const byClaude = form.notes.split("\n").some((l) => l.startsWith(SCHEME_NOTE_PREFIX) && l.includes(CLAUDE_MARK));
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border border-dashed border-violet-300 bg-violet-50/40 p-3 text-sm sm:col-span-2 dark:border-violet-800 dark:bg-violet-950/20">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span className="font-medium">Контур участка по схеме — участок ещё не образован</span>
+        {scheme.checkedAt && (
+          <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
+            ✓ контур сверен со слоями {formatDay(scheme.checkedAt)}
+          </span>
+        )}
+        {byClaude && (
+          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-200">
+            проверил Claude — подтвердите
+          </span>
+        )}
+        <button type="button" onClick={() => setHelp((v) => !v)} className="text-xs text-sky-700 hover:underline dark:text-sky-400">
+          {help ? "скрыть подсказку" : "как найти и нарисовать на НСПД"}
+        </button>
+        <ClaudeTaskButton label="⚙ задание для Claude — проверить контур" text={claudeSchemeTask(form)} />
+      </div>
+      {help && (
+        <div className="flex flex-col gap-1 text-xs text-zinc-600 dark:text-zinc-400">
+          <p>
+            1. На{" "}
+            <a href={NSPD_MAP} target="_blank" rel="noreferrer" className="text-sky-700 hover:underline dark:text-sky-400">
+              карте НСПД ↗
+            </a>{" "}
+            включите все слои «Земельные участки», «Населённые пункты (линии)», ООПТ, «Лесничества», группы ЗОУИТ и
+            «Кадастровые кварталы».
+          </p>
+          <p>2. Подложка «Без картоосновы»: участки закрашены, свободная земля — белая. Затем подложка «ДЗЗ» — поле там или лес.</p>
+          <p>
+            3. «Выбор объектов контуром» → «Выбор полигоном»: обведите луг, последний щелчок — по первой вершине. На карте
+            появится площадь, слева — что контур задевает. «Объектов не найдено» — свободно.
+          </p>
+          <p>
+            4. Координаты вершин НСПД не показывает: щёлкните по точке на Яндекс Картах — внизу будут широта и долгота. Или
+            поручите контур Claude.
+          </p>
+          <p>
+            Карта не показывает участки, которые есть в ЕГРН без границ (часто бывшие паи), — спросите администрацию. Точную
+            схему строят по кадастровому плану квартала и примыкают к соседям без зазоров (ст. 11.9 ЗК): это делает
+            кадастровый инженер или сервис НСПД в личном кабинете.
+          </p>
+        </div>
+      )}
+      <div className="flex flex-wrap items-end gap-3">
+        <label className="flex flex-col gap-1 text-xs text-zinc-500">
+          Кадастровый квартал
+          <input
+            value={scheme.quarter}
+            onChange={(e) => onApply({ scheme: { ...scheme, quarter: e.target.value } })}
+            placeholder="60:19:0024502"
+            className={`${smallInput} w-40 ${quarterBad ? "border-red-400 dark:border-red-700" : ""}`}
+          />
+        </label>
+        {measure && (
+          <span className="text-xs">
+            {parsed.points.length} вершин · <b>{String(measure.areaHa).replace(".", ",")} га</b> · периметр{" "}
+            {measure.perimeterM.toLocaleString("ru-RU")} м
+          </span>
+        )}
+      </div>
+      <label className="flex flex-col gap-1 text-xs text-zinc-500">
+        Вершины по порядку обхода — по одной на строку: широта, долгота
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onBlur={() => commit(text)}
+          rows={Math.min(10, Math.max(4, parsed.points.length + 1))}
+          placeholder={"56.419393, 29.215552\n56.419999, 29.220028\n56.417834, 29.220247"}
+          className={`${smallInput} font-mono`}
+        />
+      </label>
+      {parsed.bad.length > 0 && (
+        <p className="text-xs text-rose-600">Не разобраны строки: {parsed.bad.join(", ")} — нужно два числа: широта, долгота.</p>
+      )}
+      {quarterBad && <p className="text-xs text-rose-600">Квартал пишется так: 60:19:0024502.</p>}
+      {crossing && <p className="text-xs text-rose-600">Стороны контура пересекаются — проверьте порядок вершин, иначе площадь неверна.</p>}
+      {parsed.points.length > 0 && parsed.points.length < 3 && (
+        <p className="text-xs text-amber-700 dark:text-amber-400">Нужно хотя бы три вершины.</p>
+      )}
+      {measure && center && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+          <a href={yandexSatelliteUrl(center.lat, center.lon)} target="_blank" rel="noreferrer" className="text-sky-700 hover:underline dark:text-sky-400">
+            космоснимок Яндекса ↗
+          </a>
+          <a href={nspdPointUrl(center.lat, center.lon)} target="_blank" rel="noreferrer" className="text-sky-700 hover:underline dark:text-sky-400">
+            НСПД на месте контура ↗
+          </a>
+          <button
+            type="button"
+            onClick={() => downloadText(`${fileName}.kml`, schemeKml(parsed.points, fileName), "application/vnd.google-earth.kml+xml")}
+            className="text-sky-700 hover:underline dark:text-sky-400"
+            title="Открывается в Google Earth, Яндекс Конструкторе карт и ГИС"
+          >
+            скачать KML
+          </button>
+          <button
+            type="button"
+            onClick={() => downloadText(`${fileName}.geojson`, schemeGeoJson(parsed.points, fileName), "application/geo+json")}
+            className="text-sky-700 hover:underline dark:text-sky-400"
+          >
+            скачать GeoJSON
+          </button>
+          {scheme.checkedAt ? (
+            <button type="button" onClick={() => markChecked(false)} className="text-zinc-500 hover:text-zinc-800">
+              снять отметку о сверке
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => markChecked(true)}
+              className="rounded-lg border border-emerald-600 px-2 py-1 text-emerald-800 hover:bg-emerald-50 dark:text-emerald-300 dark:hover:bg-emerald-950"
+            >
+              Контур сверен: чужих участков, схем и аукционов нет
+            </button>
+          )}
+        </div>
+      )}
+      <p className="text-xs text-zinc-500">
+        Площадь и точка осмотра берутся из контура. Когда участок образуют и поставят на учёт, впишите кадастровый номер —
+        карточка пойдёт обычным порядком (НСПД, Росреестр, торги).
+      </p>
+    </div>
+  );
+}
+
 function PointInput({
   lat,
   lon,
@@ -2692,6 +2912,7 @@ function PlotForm({
   onClose,
   onSaved,
   draft,
+  asScheme,
 }: {
   plot: Plot | null;
   sources: Source[];
@@ -2699,8 +2920,18 @@ function PlotForm({
   onClose: () => void;
   onSaved: () => void;
   draft?: CardDraft | null;
+  asScheme?: boolean;
 }) {
-  const [form, setForm] = useState<PlotInput>(() => (draft ? { ...draft.form } : plot ? { ...plot } : emptyPlot()));
+  const [form, setForm] = useState<PlotInput>(() =>
+    draft
+      ? { ...draft.form }
+      : plot
+        ? { ...plot }
+        : asScheme
+          ? // Свободная земля: собственность не разграничена, категорию и ВРИ определит утверждённая схема
+            { ...emptyPlot(), scheme: emptyScheme(), direction: "unformed", owner: "undelimited", landCategory: "", title: "Участок по схеме у " }
+          : emptyPlot(),
+  );
   const [error, setError] = useState("");
   const [restrictionsOpen, setRestrictionsOpen] = useState(draft?.panel === "restrictions");
   const [planOpen, setPlanOpen] = useState(draft?.panel === "plan");
@@ -2747,7 +2978,7 @@ function PlotForm({
   }
 
   return (
-    <Modal title={plot ? "Участок" : "Новый участок"} onClose={onClose}>
+    <Modal title={plot ? "Участок" : form.scheme ? "Новый участок по схеме" : "Новый участок"} onClose={onClose}>
       <form onSubmit={submit} className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         {plot && (
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2 sm:col-span-2">
@@ -2771,9 +3002,16 @@ function PlotForm({
           <ProgressLine progress={checkProgress(form, settings.vri)} />
         </p>
         {error && <p className="text-sm text-rose-600 sm:col-span-2">{error}</p>}
-        <NspdPaste form={form} onApply={(patch) => setForm((f) => ({ ...f, ...patch }))} />
-        <RightsPaste form={form} onApply={(patch) => setForm((f) => ({ ...f, ...patch }))} />
-        <TorgiCheck form={form} onApply={(patch) => setForm((f) => ({ ...f, ...patch }))} />
+        {(form.scheme || form.direction === "unformed") && (
+          <SchemeSection form={form} onApply={(patch) => setForm((f) => ({ ...f, ...patch }))} />
+        )}
+        {!isPendingScheme(form) && (
+          <>
+            <NspdPaste form={form} onApply={(patch) => setForm((f) => ({ ...f, ...patch }))} />
+            <RightsPaste form={form} onApply={(patch) => setForm((f) => ({ ...f, ...patch }))} />
+            <TorgiCheck form={form} onApply={(patch) => setForm((f) => ({ ...f, ...patch }))} />
+          </>
+        )}
         <RestrictionsCheck
           form={form}
           onApply={(patch) => setForm((f) => ({ ...f, ...patch }))}
@@ -3129,6 +3367,11 @@ function PlotCard({
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-medium">{p.cadastralNumber || p.title}</span>
         {p.cadastralNumber && p.title && <span className="text-sm text-zinc-500">{p.title}</span>}
+        {isPendingScheme(p) && (
+          <span className="rounded-full bg-violet-100 px-2 py-0.5 text-xs text-violet-800 dark:bg-violet-950 dark:text-violet-300">
+            по схеме{p.scheme?.quarter ? ` · кв. ${p.scheme.quarter}` : ""}
+          </span>
+        )}
         <span className="ml-auto flex items-center gap-2">
           <AssessmentBadge assessment={assessment} />
           <span className={`rounded-full px-2 py-0.5 text-xs ${statusColors[p.status]}`}>{plotStatuses[p.status]}</span>
@@ -3985,7 +4228,7 @@ function DeadlinesView({ data, onEdit }: { data: Data; onEdit: (plot: Plot) => v
 }
 
 type Editing =
-  | { kind: "plot"; item: Plot | null }
+  | { kind: "plot"; item: Plot | null; scheme?: boolean }
   | { kind: "source"; item: Source | null }
   | { kind: "weights" }
   | { kind: "vri" }
@@ -4072,6 +4315,15 @@ export default function Registry() {
               </button>
             </>
           )}
+          {tab === "plots" && (
+            <button
+              onClick={() => setEditing({ kind: "plot", item: null, scheme: true })}
+              className="rounded-lg border border-zinc-900 px-4 py-2 text-sm hover:bg-zinc-100 dark:border-zinc-100 dark:hover:bg-zinc-900"
+              title="Участка ещё нет в ЕГРН: контур на свободной земле для схемы и предварительного согласования"
+            >
+              + Участок по схеме
+            </button>
+          )}
           {tab !== "deadlines" && (
             <button
               onClick={() => setEditing(tab === "plots" ? { kind: "plot", item: null } : { kind: "source", item: null })}
@@ -4115,6 +4367,7 @@ export default function Registry() {
       {data && editing?.kind === "plot" && (
         <PlotForm
           plot={editing.item}
+          asScheme={editing.scheme}
           sources={data.sources}
           settings={data.settings}
           onClose={closeEditing}

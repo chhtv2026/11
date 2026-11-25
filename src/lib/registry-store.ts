@@ -37,6 +37,7 @@ import { economicsFields, emptyEconomics, type Economics, type EconomicsField } 
 import { normalizeCadastralNumber } from "./nspd";
 import { districtByCadastralNumber, regionByCadastralNumber } from "./regions";
 import { vriClassifier, vriVerdicts, type VriVerdict } from "./vri";
+import { cleanScheme } from "./scheme";
 import { accessKinds, emptySurvey, overgrowthKinds, waterKinds, type Survey, type WaterItem } from "./water";
 
 // Осмотр, сохранённый до появления степени зарастания: была только галочка «зарастает»
@@ -102,6 +103,7 @@ function normalize(data: Partial<Data>): Data {
       planResult: p.planResult ?? "",
       planFindings: p.planFindings ?? [],
       survey: normalizeSurvey(p.survey),
+      scheme: p.scheme ?? null,
       adminRequestAt: p.adminRequestAt ?? null,
       checks: { ...emptyChecks(), ...p.checks },
       scores: p.scores ?? {},
@@ -299,6 +301,7 @@ function cleanPlotInput(input: Partial<PlotInput>) {
   const deadlines = cleanDeadlines(input.deadlines);
   const obligations = cleanObligations(input.obligations);
   const survey = cleanSurvey(input.survey);
+  if (input.scheme !== undefined) fields.scheme = cleanScheme(input.scheme);
   delete fields.survey;
   delete fields.obligations;
   delete fields.findings;
@@ -340,6 +343,12 @@ function districtsByCode(plots: Plot[]) {
   return districts;
 }
 
+// Район по кадастровому номеру, а у участка по схеме — по кварталу контура
+function districtFor(data: Data, plot: Plot) {
+  const number = plot.cadastralNumber || plot.scheme?.quarter || "";
+  return districtsByCode(data.plots).get(number.slice(0, 5)) ?? districtByCadastralNumber(number) ?? "";
+}
+
 // Один кадастровый номер — один участок в реестре
 function assertUniqueNumber(data: Data, number: string, exceptId?: string) {
   const n = normalizeCadastralNumber(number);
@@ -357,7 +366,7 @@ export function createPlot(input: Partial<PlotInput>): Promise<Plot> {
     plot.cadastralNumber = normalizeCadastralNumber(plot.cadastralNumber);
     assertUniqueNumber(data, plot.cadastralNumber);
     // Без района участок попадает в «Район не указан» и теряется в списке
-    if (!plot.district.trim()) plot.district = districtsByCode(data.plots).get(plot.cadastralNumber.slice(0, 5)) ?? districtByCadastralNumber(plot.cadastralNumber) ?? "";
+    if (!plot.district.trim()) plot.district = districtFor(data, plot);
     data.plots.push(plot);
     return plot;
   });
@@ -373,7 +382,7 @@ export function updatePlot(id: string, input: Partial<PlotInput>) {
       assertUniqueNumber(data, fields.cadastralNumber, id);
     }
     Object.assign(plot, fields, { updatedAt: new Date().toISOString() });
-    if (!plot.district.trim()) plot.district = districtsByCode(data.plots).get(plot.cadastralNumber.slice(0, 5)) ?? districtByCadastralNumber(plot.cadastralNumber) ?? "";
+    if (!plot.district.trim()) plot.district = districtFor(data, plot);
     return plot;
   });
 }

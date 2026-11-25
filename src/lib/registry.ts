@@ -1,6 +1,7 @@
 // Типы и справочники реестра. Файл без серверных импортов — его использует и интерфейс.
 import { emptyEconomics, type Economics } from "./economics";
 import { classifyUse, type VriOverrides } from "./vri";
+import { isPendingScheme, type Scheme } from "./scheme";
 import { emptySurvey, type Survey } from "./water";
 
 export const sourceTypes = {
@@ -110,7 +111,7 @@ export function emptyChecks(): Record<StopFactor, CheckValue> {
 // «Подъезда не видно» участок не исключает: проезд можно получить сервитутом — остаётся «не проверено».
 // Что нужно знать об участке, чтобы оценить его по стоп-факторам (owner, площадь и торги — для ст. 10.1)
 export type CheckablePlot = Pick<Plot, "checks" | "permittedUse"> &
-  Partial<Pick<Plot, "owner" | "areaHa" | "torgiCheckedAt">> & { survey?: Pick<Survey, "access"> };
+  Partial<Pick<Plot, "owner" | "areaHa" | "torgiCheckedAt" | "scheme" | "cadastralNumber">> & { survey?: Pick<Survey, "access"> };
 
 // Предельный размер участка для деятельности КФХ в Псковской области — 300 га
 // (закон Псковской области от 03.10.2003 № 299-ОЗ в ред. закона от 09.03.2016 № 1649-ОЗ; п. 7 ст. 10.1 101-ФЗ)
@@ -132,7 +133,11 @@ export function routeBasis(plot: CheckablePlot, vri: VriOverrides = {}): RouteBa
   const other: [StopFactor, string, string][] = [
     ["category", "категория — сельхозназначение", "категория земель"],
     ["permittedUse", "ВРИ подходит (менять назначение по 10.1 нельзя, п. 6)", "вид разрешённого использования"],
-    ["rights", "нет аренды, ареста и претендентов (ст. 39.16 ЗК)", "права третьих лиц — справочная информация Росреестра"],
+    [
+      "rights",
+      "нет аренды, ареста и претендентов (ст. 39.16 ЗК)",
+      isPendingScheme(plot) ? "права третьих лиц — нет ли в контуре участков без границ" : "права третьих лиц — справочная информация Росреестра",
+    ],
     ["restrictions", "зоны не запрещают сельхозиспользование", "режим зоны (ООПТ, лесничество)"],
   ];
   for (const [key, good, need] of other) {
@@ -141,7 +146,11 @@ export function routeBasis(plot: CheckablePlot, vri: VriOverrides = {}): RouteBa
     // «нет» по другому пункту уже исключает участок — здесь только отмечаем, что вопрос не закрыт
     else missing.push(v === "no" ? `${need} — там «нет»` : need);
   }
-  if (plot.torgiCheckedAt) ok.push("на torgi.gov.ru нет аукциона и претендентов");
+  // Участок по схеме ещё не образован: по нему нет лотов, а чужие аукционы и схемы видны на слоях НСПД при сверке контура
+  if (isPendingScheme(plot)) {
+    if (plot.scheme?.checkedAt) ok.push("контур не задевает чужие участки, схемы и аукционы (слои НСПД)");
+    else missing.push("контур — сверить со слоями участков НСПД");
+  } else if (plot.torgiCheckedAt) ok.push("на torgi.gov.ru нет аукциона и претендентов");
   else missing.push("торги и извещения на torgi.gov.ru");
   if (plot.areaHa === null || plot.areaHa === undefined) missing.push("площадь участка");
   else if (plot.areaHa > KFH_MAX_HA) blocking.push(`площадь ${plot.areaHa} га больше предельных ${KFH_MAX_HA} га для КФХ`);
@@ -238,6 +247,7 @@ export function checkProgress(
   const plan = excluded ? "" : (plot.planResult ?? "");
   const done = (next: string | null) => ({ nspd, rights, torgi, restrictions, next, request, zoneOpen, plan });
   if (excluded) return done(null);
+  if (isPendingScheme(plot)) return schemeProgress(plot, vri, done);
   if (!nspd) return done("сверить с карточкой НСПД");
   const step = checkSteps.find((s) => checkValue(plot, s.factor, vri) === "unknown");
   if (step?.factor === "rights" && !rights) return done(step.label);
@@ -254,6 +264,37 @@ export function checkProgress(
   }
   // Зоны на карте сверены, но режим зоны (ООПТ, культурное наследие) ещё надо уточнить
   if (step?.factor === "restrictions" && restrictions) return { ...done("ограничения — уточнить режим зоны"), warn: true };
+  if (step?.factor === "route") {
+    const missing = routeBasis(plot, vri).missing;
+    return done(missing.length ? `законный способ (ст. 10.1) — ${missing[0]}` : step.label);
+  }
+  if (step) return done(step.label);
+  const rated = (Object.keys(criteria) as Criterion[]).filter((k) => plot.scores[k]).length;
+  return done(rated < Object.keys(criteria).length ? "оценить баллами" : null);
+}
+
+// Участок по схеме, ещё не образованный: карточки НСПД, справки Росреестра и лотов на торгах у него нет.
+// Сначала контур сверяют со слоями участков, потом зоны, потом спрашивают администрацию о землях без границ и чужих заявлениях
+function schemeProgress(
+  plot: Parameters<typeof checkProgress>[0],
+  vri: VriOverrides,
+  done: (next: string | null) => CheckProgress,
+): CheckProgress {
+  const scheme = plot.scheme!;
+  if (scheme.points.length < 3) return done("контур — внести вершины (широта, долгота)");
+  if (!scheme.checkedAt) return done("контур — сверить со слоями участков НСПД");
+  if (!plot.restrictionsCheckedAt && checkValue(plot, "restrictions", vri) === "unknown") {
+    return done(checkSteps.find((s) => s.factor === "restrictions")!.label);
+  }
+  if (checkValue(plot, "rights", vri) === "unknown") {
+    const request = plot.adminRequestAt;
+    if (request) return done(`права третьих лиц — ждём ответ администрации (до ${addDays(request, ADMIN_ANSWER_DAYS).split("-").reverse().join(".")})`);
+    return { ...done("права третьих лиц — спросить администрацию, нет ли в контуре участков без границ"), warn: true };
+  }
+  if (plot.restrictionsCheckedAt && checkValue(plot, "restrictions", vri) === "unknown") {
+    return { ...done("ограничения — уточнить режим зоны"), warn: true };
+  }
+  const step = checkSteps.find((s) => checkValue(plot, s.factor, vri) === "unknown");
   if (step?.factor === "route") {
     const missing = routeBasis(plot, vri).missing;
     return done(missing.length ? `законный способ (ст. 10.1) — ${missing[0]}` : step.label);
@@ -438,6 +479,8 @@ export type Plot = {
   planFindings: string[];
   // Осмотр по карте: вода рядом (для расчёта водоохранных полос), зарастание, подъезд
   survey: Survey;
+  // Контур участка, который ещё предстоит образовать по схеме расположения (направление «Б»); у сформированного — null
+  scheme: Scheme | null;
   // Когда по участку отправлен запрос в администрацию (договоры до года, заявления, торги); ответ — 30 дней (59-ФЗ)
   adminRequestAt: string | null;
   landCategory: string;
@@ -485,6 +528,7 @@ export function emptyPlot(): PlotInput {
     planResult: "",
     planFindings: [],
     survey: emptySurvey(),
+    scheme: null,
     adminRequestAt: null,
     landCategory: "Земли сельскохозяйственного назначения",
     permittedUse: "",
