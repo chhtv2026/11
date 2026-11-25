@@ -94,7 +94,7 @@ export type Settings = {
   clearing: { shrubPerHa: number | null; forestPerHa: number | null };
 };
 
-// Заявитель — для запросов в администрацию
+// Заявитель — для заявлений в администрацию
 export type Applicant = { name: string; status: string; address: string; phone: string; email: string };
 export const emptyApplicant: Applicant = { name: "", status: "", address: "", phone: "", email: "" };
 
@@ -111,21 +111,27 @@ export function emptyChecks(): Record<StopFactor, CheckValue> {
 // «Подъезда не видно» участок не исключает: проезд можно получить сервитутом — остаётся «не проверено».
 // Что нужно знать об участке, чтобы оценить его по стоп-факторам (owner, площадь и торги — для ст. 10.1)
 export type CheckablePlot = Pick<Plot, "checks" | "permittedUse"> &
-  Partial<Pick<Plot, "owner" | "areaHa" | "torgiCheckedAt" | "scheme" | "cadastralNumber">> & { survey?: Pick<Survey, "access"> };
+  Partial<Pick<Plot, "owner" | "areaHa" | "torgiCheckedAt" | "rightsCheckedAt" | "scheme" | "cadastralNumber">> & {
+    survey?: Pick<Survey, "access">;
+  };
 
 // Предельный размер участка для деятельности КФХ в Псковской области — 300 га
 // (закон Псковской области от 03.10.2003 № 299-ОЗ в ред. закона от 09.03.2016 № 1649-ОЗ; п. 7 ст. 10.1 101-ФЗ)
 export const KFH_MAX_HA = 300;
 
-export type RouteBasis = { value: CheckValue; ok: string[]; missing: string[]; blocking: string[] };
+// later — то, что заранее не узнать: выяснится из ответа на заявление (при отказе администрация обязана назвать причину)
+export type RouteBasis = { value: CheckValue; ok: string[]; missing: string[]; blocking: string[]; later: string[] };
 
 // Законный способ по умолчанию — аренда без торгов по ст. 10.1 101-ФЗ: гражданину или КФХ, до 5 лет,
 // из земель государственной или муниципальной собственности. Отказ — по ст. 39.16 ЗК, сверх предельного
-// размера или если раньше подано чужое заявление (п. 7). Ранние чужие заявления видны только из ответа администрации.
+// размера или если раньше подано чужое заявление (п. 7). Заявления рассматривают по очереди поступления, поэтому
+// заранее администрацию не спрашиваем: чужое заявление и остальное, чего нет в открытых источниках, покажет ответ на своё.
 export function routeBasis(plot: CheckablePlot, vri: VriOverrides = {}): RouteBasis {
   const ok: string[] = [];
   const missing: string[] = [];
   const blocking: string[] = [];
+  const later: string[] = [];
+  const pending = isPendingScheme(plot);
   const owner = plot.owner ?? "unknown";
   if (owner === "private") blocking.push("земля частная, а ст. 10.1 — только для государственных и муниципальных земель");
   else if (owner === "unknown") missing.push("собственник (карточка НСПД)");
@@ -136,18 +142,24 @@ export function routeBasis(plot: CheckablePlot, vri: VriOverrides = {}): RouteBa
     [
       "rights",
       "нет аренды, ареста и претендентов (ст. 39.16 ЗК)",
-      isPendingScheme(plot) ? "права третьих лиц — нет ли в контуре участков без границ" : "права третьих лиц — справочная информация Росреестра",
+      pending ? "права третьих лиц — нет ли в контуре участков без границ" : "права третьих лиц — справочная информация Росреестра",
     ],
     ["restrictions", "зоны не запрещают сельхозиспользование", "режим зоны (ООПТ, лесничество)"],
   ];
   for (const [key, good, need] of other) {
     const v = checkValue(plot, key, vri);
+    // Справку Росреестра посмотрели (или контур сверили с картой), а сомнение осталось — его снимет только ответ на заявление
+    const checked = pending ? Boolean(plot.scheme?.checkedAt) : Boolean(plot.rightsCheckedAt);
+    if (key === "rights" && v === "unknown" && checked) {
+      later.push(pending ? "нет ли в контуре участков без границ (паи)" : "права третьих лиц — сомнение после справки Росреестра");
+      continue;
+    }
     if (v === "yes") ok.push(good);
     // «нет» по другому пункту уже исключает участок — здесь только отмечаем, что вопрос не закрыт
     else missing.push(v === "no" ? `${need} — там «нет»` : need);
   }
   // Участок по схеме ещё не образован: по нему нет лотов, а чужие аукционы и схемы видны на слоях НСПД при сверке контура
-  if (isPendingScheme(plot)) {
+  if (pending) {
     if (plot.scheme?.checkedAt) ok.push("контур не задевает чужие участки, схемы и аукционы (слои НСПД)");
     else missing.push("контур — сверить со слоями участков НСПД");
   } else if (plot.torgiCheckedAt) ok.push("на torgi.gov.ru нет аукциона и претендентов");
@@ -155,7 +167,8 @@ export function routeBasis(plot: CheckablePlot, vri: VriOverrides = {}): RouteBa
   if (plot.areaHa === null || plot.areaHa === undefined) missing.push("площадь участка");
   else if (plot.areaHa > KFH_MAX_HA) blocking.push(`площадь ${plot.areaHa} га больше предельных ${KFH_MAX_HA} га для КФХ`);
   else ok.push(`площадь ${String(plot.areaHa).replace(".", ",")} га — в пределах ${KFH_MAX_HA} га`);
-  return { value: blocking.length ? "no" : missing.length ? "unknown" : "yes", ok, missing, blocking };
+  later.push("не подал ли кто-то заявление раньше вас (п. 7 ст. 10.1)");
+  return { value: blocking.length ? "no" : missing.length ? "unknown" : "yes", ok, missing, blocking, later };
 }
 
 export function checkValue(plot: CheckablePlot, key: StopFactor, vri: VriOverrides = {}): CheckValue {
@@ -233,6 +246,7 @@ export function checkProgress(
     | "adminRequestAt"
     | "planResult"
   > &
+    Partial<Pick<Plot, "route">> &
     CheckablePlot,
   vri: VriOverrides = {},
 ): CheckProgress {
@@ -249,32 +263,42 @@ export function checkProgress(
   if (excluded) return done(null);
   if (isPendingScheme(plot)) return schemeProgress(plot, vri, done);
   if (!nspd) return done("сверить с карточкой НСПД");
-  const step = checkSteps.find((s) => checkValue(plot, s.factor, vri) === "unknown");
-  if (step?.factor === "rights" && !rights) return done(step.label);
+  const first = checkSteps.find((s) => checkValue(plot, s.factor, vri) === "unknown");
+  if (first?.factor === "rights" && !rights) return done(first.label);
   // Права третьих лиц: после Росреестра — торги и извещения, их видно только на torgi.gov.ru
   if (!torgi) return done("права третьих лиц — проверить torgi.gov.ru");
-  // Карточка Росреестра вставлена, но вопрос остался (свежая регистрация собственности) — нужен ответ администрации
-  // До запроса в администрацию — сначала зоны на карте: если участок в них не годится, спрашивать незачем
-  if (step?.factor === "rights" && rights && !restrictions && checkValue(plot, "restrictions", vri) === "unknown") {
-    return done(checkSteps.find((s) => s.factor === "restrictions")!.label);
-  }
-  if (step?.factor === "rights" && rights) {
-    if (request) return done(`права третьих лиц — ждём ответ администрации (до ${addDays(request, ADMIN_ANSWER_DAYS).split("-").reverse().join(".")})`);
-    return { ...done("права третьих лиц — уточнить в администрации"), warn: true };
-  }
+  // Справка Росреестра вставлена, а вопрос остался (свежая регистрация собственности) — администрацию заранее
+  // не спрашиваем: ответ даст само заявление. Идём дальше по остальным пунктам
+  return finishProgress(plot, vri, done, (f) => f === "rights" && rights);
+}
+
+// Общий хвост проверки: зоны, законный способ, остальные стоп-факторы, баллы и, наконец, заявление
+function finishProgress(
+  plot: Parameters<typeof checkProgress>[0],
+  vri: VriOverrides,
+  done: (next: string | null) => CheckProgress,
+  later: (factor: StopFactor) => boolean,
+): CheckProgress {
+  const step = checkSteps.find((s) => !later(s.factor) && checkValue(plot, s.factor, vri) === "unknown");
   // Зоны на карте сверены, но режим зоны (ООПТ, культурное наследие) ещё надо уточнить
-  if (step?.factor === "restrictions" && restrictions) return { ...done("ограничения — уточнить режим зоны"), warn: true };
+  if (step?.factor === "restrictions" && plot.restrictionsCheckedAt) return { ...done("ограничения — уточнить режим зоны"), warn: true };
   if (step?.factor === "route") {
     const missing = routeBasis(plot, vri).missing;
     return done(missing.length ? `законный способ (ст. 10.1) — ${missing[0]}` : step.label);
   }
   if (step) return done(step.label);
   const rated = (Object.keys(criteria) as Criterion[]).filter((k) => plot.scores[k]).length;
-  return done(rated < Object.keys(criteria).length ? "оценить баллами" : null);
+  if (rated < Object.keys(criteria).length) return done("оценить баллами");
+  if (plot.route?.submission?.done) return done(null);
+  return done(
+    isPendingScheme(plot)
+      ? "подать заявление о предварительном согласовании со схемой (ст. 39.15 ЗК)"
+      : "подать заявление об аренде без торгов (ст. 10.1 101-ФЗ)",
+  );
 }
 
 // Участок по схеме, ещё не образованный: карточки НСПД, справки Росреестра и лотов на торгах у него нет.
-// Сначала контур сверяют со слоями участков, потом зоны, потом спрашивают администрацию о землях без границ и чужих заявлениях
+// Сначала контур сверяют со слоями участков, потом зоны; участки без границ и чужие заявления покажет ответ на заявление
 function schemeProgress(
   plot: Parameters<typeof checkProgress>[0],
   vri: VriOverrides,
@@ -286,22 +310,7 @@ function schemeProgress(
   if (!plot.restrictionsCheckedAt && checkValue(plot, "restrictions", vri) === "unknown") {
     return done(checkSteps.find((s) => s.factor === "restrictions")!.label);
   }
-  if (checkValue(plot, "rights", vri) === "unknown") {
-    const request = plot.adminRequestAt;
-    if (request) return done(`права третьих лиц — ждём ответ администрации (до ${addDays(request, ADMIN_ANSWER_DAYS).split("-").reverse().join(".")})`);
-    return { ...done("права третьих лиц — спросить администрацию, нет ли в контуре участков без границ"), warn: true };
-  }
-  if (plot.restrictionsCheckedAt && checkValue(plot, "restrictions", vri) === "unknown") {
-    return { ...done("ограничения — уточнить режим зоны"), warn: true };
-  }
-  const step = checkSteps.find((s) => checkValue(plot, s.factor, vri) === "unknown");
-  if (step?.factor === "route") {
-    const missing = routeBasis(plot, vri).missing;
-    return done(missing.length ? `законный способ (ст. 10.1) — ${missing[0]}` : step.label);
-  }
-  if (step) return done(step.label);
-  const rated = (Object.keys(criteria) as Criterion[]).filter((k) => plot.scores[k]).length;
-  return done(rated < Object.keys(criteria).length ? "оценить баллами" : null);
+  return finishProgress(plot, vri, done, (f) => f === "rights");
 }
 
 // Правовой маршрут (концепция, п. 5): последовательность вопросов по каждому участку

@@ -38,7 +38,6 @@ import {
   type PlotInput,
   type PlotStatus,
   type Settings,
-  type Applicant,
   type ImportRecord,
   type TorgiExportInfo,
   TORGI_EXPORT_FRESH_DAYS,
@@ -266,9 +265,8 @@ function RouteHint({ form, vri }: { form: PlotInput; vri: VriOverrides }) {
       {basis.ok.length > 0 && <span className="text-emerald-700 dark:text-emerald-400">✓ {basis.ok.join("; ")}. </span>}
       {basis.missing.length > 0 && <span className="text-amber-700 dark:text-amber-400">не хватает: {basis.missing.join("; ")}. </span>}
       {!manual && basis.value === "yes" && "«Да» поставлено по этим проверкам. "}
-      Чужое заявление по 10.1, поданное раньше вас, видно только из ответа администрации
-      {form.adminRequestAt ? ` (запрос отправлен ${formatDay(form.adminRequestAt)})` : ""} — если оно есть, поставьте «нет». Предельный
-      размер считается вместе с уже полученными вами участками.
+      {basis.later.length > 0 && <>Выяснится из ответа на заявление: {basis.later.join("; ")} — при отказе поставьте «нет». </>}
+      Предельный размер считается вместе с уже полученными вами участками.
     </span>
   );
 }
@@ -1161,11 +1159,11 @@ function RightsPaste({ form, onApply }: { form: PlotInput; onApply: (patch: Part
     } else if (claim) {
       rights = "unknown";
       lines.push(
-        `Собственность зарегистрирована недавно (${formatDay(claim.registeredAt)}). Если участок из невостребованных долей, тот, кто его уже использует, до ${formatDay(claim.deadline)} может получить его без торгов (п. 4 ст. 12 101-ФЗ) — спросить администрацию.`,
+        `Собственность зарегистрирована недавно (${formatDay(claim.registeredAt)}). Если участок из невостребованных долей, тот, кто его уже использует, до ${formatDay(claim.deadline)} может получить его без торгов (п. 4 ст. 12 101-ФЗ) — это покажет ответ на заявление.`,
       );
       setMessage({
         tone: "warn",
-        text: `Аренды и обременений нет, но собственность зарегистрирована ${formatDay(claim.registeredAt)} — до ${formatDay(claim.deadline)} участок может уйти тому, кто его уже использует. Спросите администрацию; ответ отметьте в стоп-факторе «права третьих лиц».`,
+        text: `Аренды и обременений нет, но собственность зарегистрирована ${formatDay(claim.registeredAt)} — до ${formatDay(claim.deadline)} участок может уйти тому, кто его уже использует. Это покажет ответ на заявление; при отказе по этой причине поставьте «нет» в стоп-факторе «права третьих лиц».`,
       });
     } else {
       rights = "yes";
@@ -1209,7 +1207,7 @@ function RightsPaste({ form, onApply }: { form: PlotInput; onApply: (patch: Part
             <li>Чужие поданные заявления (10.1, предварительное согласование, аукцион) в реестре не видны — смотрите torgi.gov.ru.</li>
             <li>
               Свежая регистрация собственности (меньше 6 месяцев) — если участок из невостребованных долей, его может получить
-              тот, кто уже обрабатывает (п. 4 ст. 12 101-ФЗ). Спросите администрацию.
+              тот, кто уже обрабатывает (п. 4 ст. 12 101-ФЗ). Это покажет ответ на заявление.
             </li>
             <li>Сервис обновляется с задержкой: смотрите «Дату обновления информации».</li>
           </ul>
@@ -1237,7 +1235,7 @@ function RightsPaste({ form, onApply }: { form: PlotInput; onApply: (patch: Part
 }
 
 // Что нашлось на torgi.gov.ru и что это значит для участка.
-// rights: "no" — исключить; "unknown" — вопрос открыт, нужен ответ администрации; null — стоп-фактор не трогаем
+// rights: "no" — исключить; "unknown" — вопрос открыт, выяснится из ответа на заявление; null — стоп-фактор не трогаем
 const torgiOutcomes = [
   {
     key: "none",
@@ -1362,7 +1360,7 @@ function TorgiCheck({ form, onApply }: { form: PlotInput; onApply: (patch: Parti
 const NSPD_ZONES_MAP =
   "https://nspd.gov.ru/map?thematic=PKK&baseLayerId=235&active_layers=37577%2C37578%2C37579%2C37580%2C37581%2C875845%2C875866";
 
-// По этой фразе в заметках запрос в администрацию узнаёт участки, которые задевают лесничество краем
+// Фраза в заметках о том, что участок задевает лесничество краем (её пишет и Claude)
 const FOREST_EDGE_NOTE = "граница участка частично заходит в лесничество";
 
 // Что нашлось под участком на карте НСПД и что это значит.
@@ -1378,7 +1376,7 @@ const restrictionFindings = [
     key: "forestEdge",
     label: "Лесничество — частично, краем",
     effect: "check",
-    note: `${FOREST_EDGE_NOTE} — вероятна реестровая ошибка (п. 7 ст. 11.9 ЗК: граница участка не должна пересекать границу лесничества). Спросить администрацию, исправят ли границы до предоставления.`,
+    note: `${FOREST_EDGE_NOTE} — вероятна реестровая ошибка (п. 7 ст. 11.9 ЗК: граница участка не должна пересекать границу лесничества). Возможна причина отказа или исправления границ — смотреть ответ на заявление.`,
   },
   {
     key: "oopt",
@@ -1693,13 +1691,13 @@ const planFindingsList = [
     key: "forest",
     label: "Зона лесов или рекреационная",
     effect: "check",
-    note: "по генплану участок (или часть) в зоне лесов / рекреационной — генплан не видит его сельхозугодьем; уточнить у администрации.",
+    note: "по генплану участок (или часть) в зоне лесов / рекреационной — генплан не видит его сельхозугодьем; возможна причина отказа.",
   },
   {
     key: "build",
     label: "Жилая, производственная, общественная или иная застройка",
     effect: "check",
-    note: "по генплану участок (или часть) отведён под застройку — возможен перевод земель и изъятие; уточнить у администрации планы на участок.",
+    note: "по генплану участок (или часть) отведён под застройку — возможен перевод земель и изъятие в будущем.",
   },
   {
     key: "planned",
@@ -1717,7 +1715,7 @@ const planFindingsList = [
     key: "nodata",
     label: "Данных генплана на участок нет",
     effect: "check",
-    note: "функциональных зон генплана на участке в НСПД нет — генплан, видимо, не внесён; спросить у администрации.",
+    note: "функциональных зон генплана на участке в НСПД нет — генплан, видимо, не внесён в ФГИС ТП; посмотреть генплан на сайте администрации.",
   },
 ] as const;
 type PlanKey = (typeof planFindingsList)[number]["key"];
@@ -1879,7 +1877,7 @@ function SchemeSection({ form, onApply }: { form: PlotInput; onApply: (patch: Pa
             поручите контур Claude.
           </p>
           <p>
-            Карта не показывает участки, которые есть в ЕГРН без границ (часто бывшие паи), — спросите администрацию. Точную
+            Карта не показывает участки, которые есть в ЕГРН без границ (часто бывшие паи), — это покажет ответ на заявление. Точную
             схему строят по кадастровому плану квартала и примыкают к соседям без зазоров (ст. 11.9 ЗК): это делает
             кадастровый инженер или сервис НСПД в личном кабинете.
           </p>
@@ -3561,82 +3559,6 @@ function RegionTree({
 
 type SortMode = "checked" | "areaAsc" | "area" | "score" | "updated";
 
-// Запрос в администрацию района: то, чего не видно в открытых источниках, — договоры до года
-// (не регистрируются в ЕГРН), заявления по п. 4 ст. 12 и ст. 10.1 101-ФЗ, ст. 39.18 ЗК, планы торгов
-function adminOf(district: string) {
-  if (/^город /.test(district)) return `Администрация города ${district.replace(/^город /, "")}а`;
-  return `Администрация ${district.replace(/[иоы]й район$/, "ого района")}`;
-}
-
-function plotAddress(p: Plot) {
-  return p.notes.match(/Адрес по (?:НСПД|Росреестру): (.+)/)?.[1]?.trim() ?? "";
-}
-
-function requestLetter(addressee: string, a: Applicant, plots: Plot[], date: string) {
-  const blank = "________________";
-  const from = [a.name || blank, a.status].filter(Boolean).join(", ");
-  const contacts = [a.phone && `тел.: ${a.phone}`, a.email && `e-mail: ${a.email}`].filter(Boolean).join(", ");
-  const list = plots.map((p, i) => {
-    const area = p.areaHa ? `, площадь ${p.areaHa.toLocaleString("ru-RU", { maximumFractionDigits: 2 })} га` : "";
-    const address = plotAddress(p);
-    return `${i + 1}. ${p.cadastralNumber}${area}${address ? `, ${address}` : ""}`;
-  });
-  // Номера по списку участков, которые краем заходят в лесничество
-  const forestEdge = plots.flatMap((p, i) => (p.notes.includes(FOREST_EDGE_NOTE) ? [`№ ${i + 1}`] : []));
-  return [
-    addressee,
-    `от ${from}`,
-    `адрес: ${a.address || blank}`,
-    ...(contacts ? [contacts] : []),
-    "",
-    "ЗАПРОС",
-    "о предоставлении информации о земельных участках",
-    "",
-    "Рассматриваю возможность получения в аренду для сельскохозяйственного производства земельных участков из земель сельскохозяйственного назначения, находящихся в муниципальной собственности, в том числе без проведения торгов на основании ст. 10.1 Федерального закона от 24.07.2002 № 101-ФЗ «Об обороте земель сельскохозяйственного назначения»:",
-    "",
-    ...list,
-    "",
-    "Прошу сообщить по каждому из указанных участков:",
-    "1) заключены ли договоры аренды, безвозмездного пользования или иные договоры, по которым участок передан в пользование, в том числе на срок менее одного года (не подлежащие государственной регистрации), и срок их действия;",
-    "2) поступали ли заявления о предоставлении участка, в том числе по п. 4 ст. 12 и ст. 10.1 Федерального закона № 101-ФЗ, по ст. 39.18 Земельного кодекса РФ, и на какой стадии их рассмотрение;",
-    "3) планируется ли проведение торгов (аукциона) или иное распоряжение участком;",
-    "4) известно ли администрации о фактическом использовании участка третьими лицами.",
-    ...(forestEdge.length
-      ? [
-          `5) по участкам ${forestEdge.join(", ")} (номера по списку): известно ли о пересечении границ участка с границами лесничества и планируется ли исправление реестровой ошибки (уточнение границ) до предоставления участка.`,
-        ]
-      : []),
-    "",
-    `Ответ прошу направить ${a.email ? `на адрес электронной почты ${a.email}` : "по указанному адресу"} в срок, установленный ст. 12 Федерального закона от 02.05.2006 № 59-ФЗ «О порядке рассмотрения обращений граждан Российской Федерации».`,
-    "",
-    `${date.split("-").reverse().join(".")}                    ____________ / ${a.name || blank}`,
-  ].join("\n");
-}
-
-// Word открывает HTML с расширением .doc: шапка справа, заголовок по центру, Times New Roman 14
-function downloadDoc(text: string, fileName: string, headerLines: number) {
-  const escape = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const body = text
-    .split("\n")
-    .map((line, i) => {
-      const style =
-        i < headerLines
-          ? "text-align:right"
-          : line === "ЗАПРОС" || line.startsWith("о предоставлении информации")
-            ? "text-align:center;font-weight:bold"
-            : "text-align:justify";
-      return `<p style="margin:0;${style}">${escape(line) || "&nbsp;"}</p>`;
-    })
-    .join("");
-  const html = `<html><head><meta charset="utf-8"></head><body style="font-family:Times New Roman;font-size:14pt">${body}</body></html>`;
-  const url = URL.createObjectURL(new Blob(["﻿", html], { type: "application/msword" }));
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = fileName;
-  link.click();
-  URL.revokeObjectURL(url);
-}
-
 // Сколько участков отдавать Claude за один раз: проверка одного занимает 10–15 минут
 const CLAUDE_TASK_BATCH = 5;
 
@@ -3706,202 +3628,12 @@ function claudeRestrictionsTask(district: string, plots: Pick<Plot, "cadastralNu
     "restrictionsCheckedAt — сегодняшняя дата; checks.restrictions: yes — зон нет или только ограничения (вода, сети, дороги); unknown — ООПТ, объект культурного наследия, санзона, лесничество краем; no — участок в основном в лесничестве;",
     `restrictionZones — найденные зоны, чтобы в карточке стояли галочки: ${restrictionFindings.map((f) => `${f.key} (${f.label})`).join(", ")}; ничего не нашлось — пустой список;`,
     `в notes добавь строку «${RESTRICTIONS_NOTE_PREFIX}, <дата> ${CLAUDE_MARK}: …» с найденными зонами и их номерами.`,
-    `Фразу «${FOREST_EDGE_NOTE}» пиши, только если пересечение с лесничеством видно точно — по ней в запрос в администрацию попадает вопрос о границах.`,
+    `Фразу «${FOREST_EDGE_NOTE}» пиши, только если пересечение с лесничеством видно точно — по ней в памятке появляется предупреждение о реестровой ошибке.`,
     "Если интерфейс НСПД сбоит — пропусти участок и в конце скажи, какие остались непроверенными.",
   ].join("\n");
 }
 
-// Участки района, прошедшие НСПД, Росреестр, торги и проверку ограничений и не исключённые
-function requestCandidates(plots: Plot[], settings: Settings) {
-  return plots.filter((p) => {
-    if (assess(p, settings.weights, settings.vri).kind === "excluded") return false;
-    const progress = checkProgress(p, settings.vri);
-    return progress.nspd && progress.rights && progress.torgi && progress.restrictions;
-  });
-}
-
-function AdminRequest({
-  district,
-  plots,
-  settings,
-  onClose,
-  onSaved,
-}: {
-  district: string;
-  plots: Plot[];
-  settings: Settings;
-  onClose: () => void;
-  onSaved: () => void;
-}) {
-  const candidates = useMemo(() => {
-    const rank = (p: Plot) => (p.status === "promising" ? 0 : p.adminRequestAt ? 2 : 1);
-    return requestCandidates(plots, settings).sort((a, b) => rank(a) - rank(b) || (b.areaHa ?? 0) - (a.areaHa ?? 0));
-  }, [plots, settings]);
-  // Сначала отмечены перспективные; если их в районе нет — все прошедшие проверку, по которым запроса ещё не было
-  const [selected, setSelected] = useState<Set<string>>(() => {
-    const promising = candidates.filter((p) => p.status === "promising" && !p.adminRequestAt);
-    return new Set((promising.length ? promising : candidates.filter((p) => !p.adminRequestAt)).map((p) => p.id));
-  });
-  const [addressee, setAddressee] = useState(() => {
-    try {
-      return localStorage.getItem(`adminRequest.addressee.${district}`) || adminOf(district);
-    } catch {
-      return adminOf(district);
-    }
-  });
-  const [applicant, setApplicant] = useState<Applicant>(settings.applicant);
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
-  const day = today();
-  const chosen = candidates.filter((p) => selected.has(p.id));
-  const letter = requestLetter(addressee, applicant, chosen, day);
-  const headerLines = applicant.phone || applicant.email ? 4 : 3;
-
-  async function remember() {
-    try {
-      localStorage.setItem(`adminRequest.addressee.${district}`, addressee);
-    } catch {}
-    if (JSON.stringify(applicant) !== JSON.stringify(settings.applicant)) await api("/api/settings", "PATCH", { applicant });
-  }
-
-  async function run(action: () => Promise<void> | void, done: string) {
-    try {
-      setError("");
-      await remember();
-      await action();
-      setMessage(done);
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  }
-
-  async function markSent() {
-    const note = `Запрос в администрацию отправлен ${day.split("-").reverse().join(".")} (договоры до года, заявления по п. 4 ст. 12 и ст. 10.1 101-ФЗ, ст. 39.18 ЗК, планы торгов). Ответ — в течение 30 дней.`;
-    for (const p of chosen) {
-      await api(`/api/plots/${p.id}`, "PATCH", { adminRequestAt: day, notes: [p.notes.trim(), note].filter(Boolean).join("\n") });
-    }
-    onSaved();
-  }
-
-  const field = (key: keyof Applicant, label: string, placeholder: string) => (
-    <label className="flex flex-col gap-1 text-xs text-zinc-500">
-      {label}
-      <input
-        value={applicant[key]}
-        onChange={(e) => setApplicant({ ...applicant, [key]: e.target.value })}
-        placeholder={placeholder}
-        className={inputClass}
-      />
-    </label>
-  );
-
-  return (
-    <Modal title={`Запрос в администрацию — ${district}`} onClose={onClose}>
-      <div className="flex flex-col gap-4 text-sm">
-        <p className="text-zinc-500">
-          Одно письмо на район: есть ли договоры до года (их нет в ЕГРН), заявления по п. 4 ст. 12 и ст. 10.1 101-ФЗ и ст.
-          39.18 ЗК, планы торгов. Ответ — в течение 30 дней (59-ФЗ). В список входят участки, прошедшие НСПД, Росреестр,
-          торги и проверку ограничений; сначала отмечены «Перспективные» — критерии перспективности разработаем в следующем блоке.
-        </p>
-
-        {candidates.length === 0 ? (
-          <p className="text-amber-700 dark:text-amber-400">В районе пока нет участков, прошедших все четыре проверки.</p>
-        ) : (
-          <div className="flex flex-col gap-1">
-            <div className="flex items-center justify-between text-xs text-zinc-500">
-              <span>
-                Участки: выбрано {chosen.length} из {candidates.length}
-              </span>
-              <span className="flex gap-3">
-                <button type="button" className="underline" onClick={() => setSelected(new Set(candidates.map((p) => p.id)))}>
-                  все
-                </button>
-                <button type="button" className="underline" onClick={() => setSelected(new Set())}>
-                  ни одного
-                </button>
-              </span>
-            </div>
-            <ul className="max-h-64 overflow-y-auto rounded-lg border border-zinc-200 bg-white p-2 dark:border-zinc-800 dark:bg-zinc-900">
-              {candidates.map((p) => (
-                <li key={p.id}>
-                  <label className="flex items-baseline gap-2 py-0.5">
-                    <input
-                      type="checkbox"
-                      checked={selected.has(p.id)}
-                      onChange={(e) => {
-                        const next = new Set(selected);
-                        if (e.target.checked) next.add(p.id);
-                        else next.delete(p.id);
-                        setSelected(next);
-                      }}
-                    />
-                    <span className="font-mono text-xs">{p.cadastralNumber}</span>
-                    <span className="text-xs text-zinc-500">
-                      {p.areaHa != null && `${p.areaHa.toLocaleString("ru-RU", { maximumFractionDigits: 1 })} га`}
-                      {p.status === "promising" && " · перспективный"}
-                      {p.adminRequestAt && ` · запрос уже был ${shortDay(p.adminRequestAt)}`}
-                    </span>
-                  </label>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        <label className="flex flex-col gap-1 text-xs text-zinc-500">
-          Кому (сверьте название с сайтом района — многие районы стали муниципальными округами)
-          <input value={addressee} onChange={(e) => setAddressee(e.target.value)} className={inputClass} />
-        </label>
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          {field("name", "ФИО заявителя", "Фамилия Имя Отчество")}
-          {field("status", "Статус (необязательно)", "глава КФХ, ОГРНИП …")}
-          {field("address", "Почтовый адрес", "индекс, область, город, улица, дом")}
-          {field("phone", "Телефон", "+7 …")}
-          {field("email", "E-mail для ответа", "name@example.ru")}
-        </div>
-        <p className="text-xs text-zinc-500">Данные заявителя запоминаются для следующих запросов.</p>
-
-        <textarea readOnly value={letter} rows={12} className={`${inputClass} font-mono text-xs`} />
-
-        {error && <p className="text-rose-700 dark:text-rose-400">{error}</p>}
-        {message && <p className="text-emerald-700 dark:text-emerald-400">{message}</p>}
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            disabled={!chosen.length}
-            onClick={() => run(() => downloadDoc(letter, `Запрос в администрацию — ${district} — ${day}.doc`, headerLines), "Файл для Word скачан.")}
-            className="rounded-lg bg-zinc-900 px-4 py-2 text-white hover:bg-zinc-700 disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900"
-          >
-            Скачать для Word
-          </button>
-          <button
-            type="button"
-            disabled={!chosen.length}
-            onClick={() => run(() => navigator.clipboard.writeText(letter), "Текст скопирован — вставьте его в письмо или обращение на Госуслугах.")}
-            className="rounded-lg border border-zinc-300 px-4 py-2 hover:bg-zinc-100 disabled:opacity-40 dark:border-zinc-700 dark:hover:bg-zinc-800"
-          >
-            Скопировать текст
-          </button>
-          <button
-            type="button"
-            disabled={!chosen.length}
-            onClick={() => run(markSent, "")}
-            className="rounded-lg bg-violet-700 px-4 py-2 text-white hover:bg-violet-600 disabled:opacity-40"
-          >
-            Запрос отправлен — отметить участки ({chosen.length})
-          </button>
-        </div>
-        <p className="text-xs text-zinc-500">
-          Куда отправить: e-mail администрации с её сайта или «Обращение в госорган» на Госуслугах. После отправки нажмите
-          фиолетовую кнопку — у участков появится «✉ запрос» и срок ответа.
-        </p>
-      </div>
-    </Modal>
-  );
-}
-
-function PlotsView({ data, onEdit, onChanged }: { data: Data; onEdit: (plot: Plot | null) => void; onChanged: () => void }) {
-  const [requestFor, setRequestFor] = useState<string | null>(null);
+function PlotsView({ data, onEdit }: { data: Data; onEdit: (plot: Plot | null) => void }) {
   // Район, для которого только что скопировано задание для Claude
   const [taskCopied, setTaskCopied] = useState<string | null>(null);
 
@@ -4032,7 +3764,6 @@ function PlotsView({ data, onEdit, onChanged }: { data: Data; onEdit: (plot: Plo
                 const area = list.reduce((sum, p) => sum + (p.areaHa ?? 0), 0);
                 const excluded = list.filter((p) => assessments.get(p.id)!.kind === "excluded").length;
                 const all = data.plots.filter((p) => regionOf(p) === region && districtOf(p) === district);
-                const ready = requestCandidates(all, data.settings).length;
                 const toCheck = restrictionsToCheck(all, data.settings);
                 const planQueue = planToCheck(all, data.settings);
                 return (
@@ -4080,18 +3811,6 @@ function PlotsView({ data, onEdit, onChanged }: { data: Data; onEdit: (plot: Plo
                                 : `📐 Генплан — задание для Claude · ${planQueue.length}`}
                           </button>
                         )}
-                        {ready > 0 && (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              setRequestFor(`${region}|${district}`);
-                            }}
-                            className="rounded-full bg-violet-100 px-2 py-0.5 text-xs text-violet-800 hover:bg-violet-200 dark:bg-violet-950 dark:text-violet-300"
-                          >
-                            ✉ Запрос в администрацию · {ready}
-                          </button>
-                        )}
                       </span>
                     </summary>
                     <ul className="mt-2 flex flex-col gap-2">
@@ -4115,18 +3834,6 @@ function PlotsView({ data, onEdit, onChanged }: { data: Data; onEdit: (plot: Plo
         </div>
       )}
       </div>
-      {requestFor && (
-        <AdminRequest
-          district={requestFor.split("|")[1]}
-          plots={data.plots.filter((p) => `${regionOf(p)}|${districtOf(p)}` === requestFor)}
-          settings={data.settings}
-          onClose={() => setRequestFor(null)}
-          onSaved={() => {
-            setRequestFor(null);
-            onChanged();
-          }}
-        />
-      )}
     </div>
   );
 }
@@ -4357,7 +4064,7 @@ export default function Registry() {
       {!data ? (
         <p className="text-sm text-zinc-500">Загрузка…</p>
       ) : tab === "plots" ? (
-        <PlotsView data={data} onEdit={(item) => setEditing({ kind: "plot", item })} onChanged={reload} />
+        <PlotsView data={data} onEdit={(item) => setEditing({ kind: "plot", item })} />
       ) : tab === "deadlines" ? (
         <DeadlinesView data={data} onEdit={(item) => setEditing({ kind: "plot", item })} />
       ) : (
