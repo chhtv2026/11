@@ -1432,7 +1432,10 @@ const CLAUDE_CONFIRMED = "(проверил Claude, подтверждено)";
 function savedZones(form: PlotInput): RestrictionKey[] {
   const keys = new Set<string>(restrictionFindings.map((f) => f.key));
   if (form.restrictionZones?.length) return form.restrictionZones.filter((z): z is RestrictionKey => keys.has(z));
-  return restrictionFindings.filter((f) => form.notes.includes(f.note)).map((f) => f.key);
+  // «Краем в лесничестве» узнаём по ключевой фразе: текст пункта менялся, а в старых заметках он прежний
+  return restrictionFindings
+    .filter((f) => form.notes.includes(f.key === "forestEdge" ? FOREST_EDGE_NOTE : f.note))
+    .map((f) => f.key);
 }
 
 const restrictionLines = (notes: string) => notes.split("\n").filter((l) => l.startsWith(RESTRICTIONS_NOTE_PREFIX));
