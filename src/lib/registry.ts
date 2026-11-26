@@ -230,6 +230,8 @@ export type CheckProgress = {
   zoneOpen: boolean;
   // Генплан смотрят отдельно от очереди проверок: "" — не смотрели
   plan: PlanResult;
+  // Осмотр по карте записан (вода, зарастание или подъезд) — генплан при этом могли ещё не смотреть
+  surveyed: boolean;
 };
 
 // Где участок в проверке и что делать дальше; у исключённого следующего шага нет
@@ -246,7 +248,7 @@ export function checkProgress(
     | "adminRequestAt"
     | "planResult"
   > &
-    Partial<Pick<Plot, "route">> &
+    Partial<Pick<Plot, "route" | "survey">> &
     CheckablePlot,
   vri: VriOverrides = {},
 ): CheckProgress {
@@ -259,7 +261,9 @@ export function checkProgress(
   // У исключённого участка режим зоны выяснять незачем — плашку не показываем
   const zoneOpen = !excluded && restrictions && checkValue(plot, "restrictions", vri) === "unknown";
   const plan = excluded ? "" : (plot.planResult ?? "");
-  const done = (next: string | null) => ({ nspd, rights, torgi, restrictions, next, request, zoneOpen, plan });
+  const s = plot.survey;
+  const surveyed = Boolean(s && (s.water?.length || s.overgrowth || s.access));
+  const done = (next: string | null) => ({ nspd, rights, torgi, restrictions, next, request, zoneOpen, plan, surveyed });
   if (excluded) return done(null);
   if (isPendingScheme(plot)) return schemeProgress(plot, vri, done);
   if (!nspd) return done("сверить с карточкой НСПД");

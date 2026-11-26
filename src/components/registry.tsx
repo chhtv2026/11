@@ -3324,6 +3324,7 @@ function ProgressLine({ progress }: { progress: CheckProgress }) {
           ⚠ ограничения: уточнить режим зоны
         </span>
       )}
+      {progress.surveyed && <span className="text-emerald-700 dark:text-emerald-400">✓ осмотр</span>}
       {progress.plan === "ok" && <span className="text-emerald-700 dark:text-emerald-400">✓ генплан</span>}
       {progress.plan === "check" && (
         <span className="rounded-full bg-amber-100 px-2 font-medium text-amber-900 ring-1 ring-amber-400 dark:bg-amber-950 dark:text-amber-200 dark:ring-amber-700">
