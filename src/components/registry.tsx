@@ -1673,7 +1673,8 @@ function RestrictionsCheck({
 
 // Генплан по карте НСПД: тематическая карта «Минсельхоз России», папка «ФГИС ТП» — функциональные зоны,
 // планируемые автодороги, ЛЭП, трубопроводы, железные дороги, водоохранные зоны и береговые полосы
-// (документы во ФГИС ТП с октября 2026 г. закрыты для гостей, а слои в НСПД открыты)
+// Генплан — по желанию: с 20.10.2026 ФГИС ТП закрыла материалы для гостей, а в конце ноября 2026 г. слои пропали и из НСПД.
+// Не посмотрели — планируемые объекты покажет ответ на заявление (они в подсказке «законного способа»)
 const NSPD_PLAN_MAP =
   "https://nspd.gov.ru/map?thematic=PKK&theme_id=566&baseLayerId=235&active_layers=846615%2C844783%2C846114%2C847068%2C844794%2C844738%2C844885";
 
@@ -2463,9 +2464,15 @@ function PlanCheck({
           <p className="text-xs font-medium text-zinc-700 dark:text-zinc-300">Генплан</p>
           <div className="text-xs text-zinc-500">
             <p>
-              Карта откроется на тематике «Минсельхоз России» с включёнными слоями ФГИС ТП: функциональные зоны генплана,
-              планируемые автодороги, ЛЭП, трубопроводы и железные дороги, водоохранные зоны и береговые полосы. Сами
-              документы во ФГИС ТП с октября 2026 г. закрыты, а слои в НСПД открыты.
+              Генплан смотреть не обязательно. С 20 октября 2026 г. ФГИС ТП закрыла материалы для гостей, а в конце
+              ноября слои генплана пропали и из НСПД. Если генплан поселения опубликован на сайте администрации — можно
+              посмотреть там; если нет — планируемую дорогу, ЛЭП или расширение деревни покажет ответ на заявление (это
+              есть в подсказке «законного способа»). Территориальные зоны ПЗЗ, границы населённых пунктов и лесничеств
+              в НСПД по-прежнему видны — их сверяют в проверке ограничений.
+            </p>
+            <p className="mt-1">
+              Если слои вернутся, карта откроется на тематике «Минсельхоз России» со слоями ФГИС ТП: функциональные
+              зоны, планируемые автодороги, ЛЭП, трубопроводы и железные дороги, водоохранные зоны.
             </p>
             <ol className="ml-4 mt-1 list-decimal">
               <li>Найдите участок по номеру (поиск «Объекты недвижимости»).</li>
@@ -3585,9 +3592,9 @@ function restrictionsToCheck(plots: Plot[], settings: Settings) {
   return claudeQueue(plots, settings, (p) => !p.restrictionsCheckedAt);
 }
 
-// Участки района, по которым ещё не смотрели генплан
+// Участки района, которые ещё не осматривали по карте (генплан — по желанию, по нему очередь не держим)
 function planToCheck(plots: Plot[], settings: Settings) {
-  return claudeQueue(plots, settings, (p) => !p.planCheckedAt);
+  return claudeQueue(plots, settings, (p) => !p.planCheckedAt && !checkProgress(p, settings.vri).surveyed);
 }
 
 // Задание для Claude: посмотреть генплан по слоям ФГИС ТП на карте НСПД и записать в карточки
@@ -3612,7 +3619,7 @@ function claudePlanTask(district: string, plots: Pick<Plot, "cadastralNumber">[]
     `survey — осмотр: { water: [{ kind: ${Object.keys(waterKinds).join(" | ")}, name, distanceM — до участка в метрах, size — длина реки в км или площадь озера в км² (если не знаешь — null) }], overgrowth: ${Object.keys(overgrowthKinds).filter(Boolean).map((k) => `${k} (${overgrowthKinds[k as OvergrowthKind]})`).join(" | ")}, overgrownShare — доля заросшей площади в % на глаз по космоснимку, access: road | track | none, note — что ещё видно, lat и lon — точка внутри участка (WGS84, широта и долгота) };`,
     `в notes добавь строку «${PLAN_NOTE_PREFIX}, <дата> ${CLAUDE_MARK}: …» — какие зоны и объекты нашлись и где, и что увидел при осмотре.`,
     "Участок не отклоняй сам (status не меняй) — это решаю я.",
-    "Если интерфейс НСПД сбоит — пропусти участок и в конце скажи, какие остались непроверенными.",
+    "Если слоёв ФГИС ТП в НСПД нет (с ноября 2026 г. их убрали) — генплан не записывай (planCheckedAt не ставь), сделай только осмотр; если интерфейс НСПД сбоит — пропусти участок. В конце скажи, что осталось непроверенным.",
   ].join("\n");
 }
 
@@ -3845,14 +3852,14 @@ function PlotsView({ data, onEdit }: { data: Data; onEdit: (plot: Plot | null) =
                               e.preventDefault();
                               copyClaudeTask(`${district}|plan`, claudePlanTask(district, planQueue.slice(0, CLAUDE_TASK_BATCH)));
                             }}
-                            title={`Скопировать задание на ${Math.min(planQueue.length, CLAUDE_TASK_BATCH)} уч. (сначала самые перспективные): Claude посмотрит генплан по слоям ФГИС ТП на карте НСПД и запишет найденное в карточки. Вставьте задание в окно Claude.`}
+                            title={`Скопировать задание на ${Math.min(planQueue.length, CLAUDE_TASK_BATCH)} уч. (сначала самые перспективные): Claude осмотрит участки по космоснимку (вода, зарастание, подъезд), посмотрит генплан, если слои ФГИС ТП есть, и запишет найденное в карточки. Вставьте задание в окно Claude.`}
                             className="rounded-full bg-teal-100 px-2 py-0.5 text-xs text-teal-800 hover:bg-teal-200 dark:bg-teal-950 dark:text-teal-300"
                           >
                             {taskCopied === `${district}|plan`
                               ? "✓ задание скопировано — вставьте в окно Claude"
                               : planQueue.length > CLAUDE_TASK_BATCH
-                                ? `📐 Генплан — задание для Claude · ${CLAUDE_TASK_BATCH} из ${planQueue.length}`
-                                : `📐 Генплан — задание для Claude · ${planQueue.length}`}
+                                ? `📐 Осмотр по карте — задание для Claude · ${CLAUDE_TASK_BATCH} из ${planQueue.length}`
+                                : `📐 Осмотр по карте — задание для Claude · ${planQueue.length}`}
                           </button>
                         )}
                       </span>

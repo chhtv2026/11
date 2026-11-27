@@ -111,7 +111,7 @@ export function emptyChecks(): Record<StopFactor, CheckValue> {
 // «Подъезда не видно» участок не исключает: проезд можно получить сервитутом — остаётся «не проверено».
 // Что нужно знать об участке, чтобы оценить его по стоп-факторам (owner, площадь и торги — для ст. 10.1)
 export type CheckablePlot = Pick<Plot, "checks" | "permittedUse"> &
-  Partial<Pick<Plot, "owner" | "areaHa" | "torgiCheckedAt" | "rightsCheckedAt" | "scheme" | "cadastralNumber">> & {
+  Partial<Pick<Plot, "owner" | "areaHa" | "torgiCheckedAt" | "rightsCheckedAt" | "scheme" | "cadastralNumber" | "planCheckedAt">> & {
     survey?: Pick<Survey, "access">;
   };
 
@@ -169,6 +169,12 @@ export function routeBasis(plot: CheckablePlot, vri: VriOverrides = {}): RouteBa
   if (plot.areaHa === null || plot.areaHa === undefined) missing.push("площадь участка");
   else if (plot.areaHa > KFH_MAX_HA) blocking.push(`площадь ${plot.areaHa} га больше предельных ${KFH_MAX_HA} га для КФХ`);
   else ok.push(`площадь ${String(plot.areaHa).replace(".", ",")} га — в пределах ${KFH_MAX_HA} га`);
+  // Генплан — по желанию: с октября 2026 г. ФГИС ТП закрыта для гостей, слои в НСПД пропали. Не посмотрели —
+  // планируемый объект на участке (отказ по ст. 39.16 ЗК) и расширение деревни покажет ответ на заявление
+  if (!plot.planCheckedAt) {
+    later.push("нет ли на участке планируемой дороги, ЛЭП или другого объекта по генплану (ст. 39.16 ЗК)");
+    if (pending) later.push("не войдёт ли контур в населённый пункт по генплану");
+  }
   later.push("не подал ли кто-то заявление раньше вас (п. 7 ст. 10.1)");
   return { value: blocking.length ? "no" : missing.length ? "unknown" : "yes", ok, missing, blocking, later };
 }
